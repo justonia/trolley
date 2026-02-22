@@ -66,6 +66,15 @@
             libxinerama
             libxrandr
           ];
+
+          shellHook = lib.optionalString pkgs.stdenv.hostPlatform.isDarwin ''
+            # Ghostty's build.zig eagerly builds for iOS even when we only need
+            # macOS. Nix only ships a macOS SDK, so we unset Nix's SDK env vars
+            # and let Zig discover the system Xcode which has all Apple SDKs.
+            unset SDKROOT
+            unset DEVELOPER_DIR
+            export PATH=$(echo "$PATH" | awk -v RS=: -v ORS=: '$0 !~ /xcrun/ || $0 == "/usr/bin" {print}' | sed 's/:$//')
+          '';
         };
       });
     };

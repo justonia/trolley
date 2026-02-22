@@ -122,12 +122,26 @@ build-runtime *flags:
     cd runtime && zig build $zig_target $optimize -Dconfig-lib="$config_lib" --prefix "$prefix"
 
     # Step 2: macOS needs a separate Swift build for the executable
+    is_macos=false
     if [[ "$target" == *"-macos" ]]; then
+        is_macos=true
+    elif [ -z "$target" ] && [[ "$(uname -s)" == "Darwin" ]]; then
+        is_macos=true
+        arch=$(uname -m); if [ "$arch" = "arm64" ]; then arch="aarch64"; fi
+        rust_target=$(just _rust-target "$arch-macos")
+    fi
+    if $is_macos; then
         swift_config="debug"
         if [ -n "$release" ]; then swift_config="release"; fi
+        # When no --target was given, cargo outputs to target/$cargo_profile (no triple).
+        if [ -n "$target" ]; then
+            config_link_dir="../../config/target/$rust_target/$cargo_profile"
+        else
+            config_link_dir="../../config/target/$cargo_profile"
+        fi
         cd macos && swift build -c "$swift_config" \
             -Xlinker -L../$prefix/lib \
-            -Xlinker -L../../config/target/$rust_target/$cargo_profile
+            -Xlinker -L$config_link_dir
         mkdir -p ../$prefix/bin
         cp ".build/$swift_config/trolley" "../$prefix/bin/trolley"
     fi

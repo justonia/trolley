@@ -240,7 +240,7 @@ class TrolleyView: NSView, NSTextInputClient {
         super.viewDidChangeBackingProperties()
         guard let surface = gSurface else { return }
         let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 1.0
-        ghostty_surface_set_content_scale(surface, Float(scale), Float(scale))
+        ghostty_surface_set_content_scale(surface, Double(scale), Double(scale))
     }
 
     // MARK: - Focus
@@ -352,9 +352,9 @@ class TrolleyView: NSView, NSTextInputClient {
     func selectedRange() -> NSRange { NSRange(location: NSNotFound, length: 0) }
     func markedRange() -> NSRange { NSRange(location: NSNotFound, length: 0) }
     func hasMarkedText() -> Bool { false }
-    func attributedSubstring(forProposedRange range: NSRange, actualRange: NSRange?) -> NSAttributedString? { nil }
+    func attributedSubstring(forProposedRange range: NSRange, actualRange: NSRangePointer?) -> NSAttributedString? { nil }
     func validAttributesForMarkedText() -> [NSAttributedString.Key] { [] }
-    func firstRect(forCharacterRange range: NSRange, actualRange: NSRange?) -> NSRect { .zero }
+    func firstRect(forCharacterRange range: NSRange, actualRange: NSRangePointer?) -> NSRect { .zero }
     func characterIndex(for point: NSPoint) -> Int { 0 }
 
     override func doCommand(by selector: Selector) {
@@ -556,11 +556,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Set initial size
         let backed = view.convertToBacking(view.bounds.size)
         ghostty_surface_set_size(surface, UInt32(backed.width), UInt32(backed.height))
-        ghostty_surface_set_content_scale(surface, Float(window.backingScaleFactor), Float(window.backingScaleFactor))
+        ghostty_surface_set_content_scale(surface, Double(window.backingScaleFactor), Double(window.backingScaleFactor))
         ghostty_surface_set_focus(surface, true)
 
         // -- Show window --
         window.makeKeyAndOrderFront(nil)
+        if #available(macOS 14.0, *) {
+            NSApp.activate()
+        } else {
+            NSApp.activate(ignoringOtherApps: true)
+        }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -573,5 +578,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 // ---------------------------------------------------------------------------
 let delegate = AppDelegate()
 let app = NSApplication.shared
+app.setActivationPolicy(.regular)
 app.delegate = delegate
 app.run()

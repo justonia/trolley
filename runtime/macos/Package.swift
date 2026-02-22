@@ -9,13 +9,18 @@ let package = Package(
             name: "CGhostty",
             path: "Sources/CGhostty"
         ),
+        .systemLibrary(
+            name: "CTrolley",
+            path: "Sources/CTrolley"
+        ),
         .executableTarget(
             name: "trolley",
-            dependencies: ["CGhostty"],
+            dependencies: ["CGhostty", "CTrolley"],
             path: "Sources",
-            exclude: ["CGhostty"],
+            exclude: ["CGhostty", "CTrolley"],
             linkerSettings: [
                 .linkedFramework("AppKit"),
+                .linkedFramework("Carbon"),
                 .linkedFramework("Metal"),
                 .linkedFramework("QuartzCore"),
                 .linkedLibrary("c++"),

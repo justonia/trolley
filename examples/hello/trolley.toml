@@ -7,11 +7,16 @@ version = "0.1.0"
 [linux]
 binaries = { x86_64 = "zig-out/bin/hello" }
 
+[macos]
+binaries = { aarch64 = "zig-out/bin/hello", x86_64 = "zig-out/bin/hello" }
+
 [gui]
-initial_width = 200
-initial_height = 200
-max_width = 200
-max_height = 200
+initial_width = 400
+initial_height = 400
+max_width = 400
+max_height = 400
+min_width = 200
+min_height = 200
 
 [fonts]
 families = [{ nerdfont = "BigBlueTerminal" }]
