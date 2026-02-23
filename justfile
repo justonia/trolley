@@ -268,6 +268,15 @@ example name *flags: (build-runtime flags)
     TROLLEY_RUNTIME_SOURCE={{ justfile_directory() }}/runtime/$prefix/bin/trolley \
         cargo run --quiet --manifest-path cli/Cargo.toml -- run --config examples/{{ name }}/trolley.toml
 
+# Bump version in all files: just bump 0.2.0
+bump version:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "{{ version }}" > VERSION
+    sed -i 's/^version = ".*"/version = "{{ version }}"/' cli/Cargo.toml config/Cargo.toml
+    sed -i 's/\.version = ".*"/.version = "{{ version }}"/' runtime/build.zig.zon
+    cd cli && cargo generate-lockfile --quiet
+
 # Clean font cache
 clean-fonts:
     rm -rf trolley/cache/fonts
