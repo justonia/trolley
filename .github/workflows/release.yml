@@ -76,9 +76,9 @@ jobs:
       matrix:
         include:
           - target: x86_64-macos
-            runner: macos-13
+            runner: macos-15-large
           - target: aarch64-macos
-            runner: macos-14
+            runner: macos-15
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
