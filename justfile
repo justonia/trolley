@@ -225,9 +225,10 @@ release-cli *flags:
         just build-cli --release --target "$target"
 
     rust_target=$(just _rust-target "$target")
+    exe="trolley"; if [[ "$target" == *-windows ]]; then exe="trolley.exe"; fi
     mkdir -p dist
     tar cJf "dist/trolley-cli-${target}.tar.xz" \
-        -C "cli/target/$rust_target/release" "trolley"
+        -C "cli/target/$rust_target/release" "$exe"
 
 # Build and package the runtime for release
 # Requires: --target <triple>
@@ -264,9 +265,10 @@ release-runtime *flags:
     if [ -n "$system" ]; then build_flags="$build_flags --system $system"; fi
     just build-runtime $build_flags
 
+    exe="trolley"; if [[ "$target" == *-windows ]]; then exe="trolley.exe"; fi
     mkdir -p dist
     tar cJf "dist/trolley-runtime-${target}.tar.xz" \
-        -C "runtime/zig-out-release/bin" "trolley"
+        -C "runtime/zig-out-release/bin" "$exe"
 
 # Build and package everything for release
 # Requires: --target <triple>

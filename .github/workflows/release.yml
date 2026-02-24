@@ -110,8 +110,51 @@ jobs:
           name: artifacts-${{ matrix.target }}
           path: dist/trolley-*.tar.xz
 
+  build-windows:
+    needs: validate
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Zig
+        shell: pwsh
+        run: |
+          $fileContent = Get-Content -Path "runtime/build.zig.zon" -Raw
+          $pattern = 'minimum_zig_version\s*=\s*"([^"]+)"'
+          $zigVersion = [regex]::Match($fileContent, $pattern).Groups[1].Value
+          $version = "zig-x86_64-windows-$zigVersion"
+          Write-Output "Installing $version"
+          $uri = "https://ziglang.org/download/$zigVersion/$version.zip"
+          Invoke-WebRequest -Uri "$uri" -OutFile ".\zig-windows.zip"
+          Expand-Archive -Path ".\zig-windows.zip" -DestinationPath ".\" -Force
+          Remove-Item -Path ".\zig-windows.zip"
+          Rename-Item -Path ".\$version" -NewName ".\zig"
+          Write-Host "Zig installed:"
+          .\zig\zig.exe version
+          # Add zig to PATH for subsequent steps
+          "$PWD\zig" | Out-File -FilePath $env:GITHUB_PATH -Append
+
+      - name: Setup environment
+        shell: bash
+        run: |
+          rustup target add x86_64-pc-windows-gnu
+          # MSYS2 provides cygpath (needed by just) and xz (needed by tar -J)
+          echo "C:\msys64\usr\bin" >> "$GITHUB_PATH"
+          cargo install just
+
+      - name: Build and package
+        shell: bash
+        run: just release --target x86_64-windows
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: artifacts-x86_64-windows
+          path: dist/trolley-*.tar.xz
+
   release:
-    needs: [validate, build-linux, build-macos]
+    needs: [validate, build-linux, build-macos, build-windows]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
