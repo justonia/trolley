@@ -121,19 +121,40 @@ build-runtime *flags:
         esac
     done
 
-    # Build config staticlib
+    # Build config staticlib.
+    # Zig uses LLD (GNU-style linking), so on Windows the config crate must
+    # be built with the GNU ABI target even when the host default is MSVC.
     config_flags=""
     if [ -n "$release" ]; then config_flags="--release"; fi
-    if [ -n "$target" ]; then config_flags="$config_flags --target $target"; fi
+    if [ -n "$target" ]; then
+        config_flags="$config_flags --target $target"
+    elif [[ "$(uname -s)" == MINGW* || "$(uname -s)" == MSYS* || "$(uname -o 2>/dev/null)" == "Msys" || -n "${WINDIR:-}" ]]; then
+        config_flags="$config_flags --target x86_64-windows"
+    fi
     just build-config $config_flags
 
     # Determine config lib path
     if [ -n "$target" ]; then
         rust_target=$(just _rust-target "$target")
-        config_lib="{{ justfile_directory() }}/config/target/$rust_target/$cargo_profile/libtrolley_config.a"
+        config_dir="{{ justfile_directory() }}/config/target/$rust_target/$cargo_profile"
         zig_target="-Dtarget=$(just _zig-target "$target")"
+    elif [ -n "${WINDIR:-}" ]; then
+        # Host Windows build forced to GNU target above
+        config_dir="{{ justfile_directory() }}/config/target/x86_64-pc-windows-gnu/$cargo_profile"
     else
-        config_lib="{{ justfile_directory() }}/config/target/$cargo_profile/libtrolley_config.a"
+        config_dir="{{ justfile_directory() }}/config/target/$cargo_profile"
+    fi
+
+    # Detect correct library filename: MSVC produces trolley_config.lib,
+    # GNU produces libtrolley_config.a
+    if [ -f "$config_dir/libtrolley_config.a" ]; then
+        config_lib="$config_dir/libtrolley_config.a"
+    elif [ -f "$config_dir/trolley_config.lib" ]; then
+        config_lib="$config_dir/trolley_config.lib"
+    else
+        echo "Error: config lib not found in $config_dir" >&2
+        echo "Expected libtrolley_config.a or trolley_config.lib" >&2
+        exit 1
     fi
 
     # Step 1: zig build (libghostty + exe on Linux/Windows, libghostty only on macOS)
@@ -265,8 +286,9 @@ example name *flags: (build-runtime flags)
     for flag in {{ flags }}; do
         if [ "$flag" = "--release" ]; then prefix="zig-out-release"; fi
     done
-    TROLLEY_RUNTIME_SOURCE={{ justfile_directory() }}/runtime/$prefix/bin/trolley \
-        cargo run --quiet --manifest-path cli/Cargo.toml -- run --config examples/{{ name }}/trolley.toml
+    exe_suffix=""; if [ -n "${WINDIR:-}" ]; then exe_suffix=".exe"; fi
+    TROLLEY_RUNTIME_SOURCE='{{ justfile_directory() }}/runtime/'$prefix'/bin/trolley'$exe_suffix \
+        cargo run --quiet --manifest-path cli/Cargo.toml -- run --config 'examples/{{ name }}/trolley.toml'
 
 # Bump version in all files: just bump 0.2.0
 bump version:

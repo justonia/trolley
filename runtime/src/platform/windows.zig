@@ -120,13 +120,13 @@ extern "gdi32" fn SwapBuffers(
 
 extern "gdi32" fn ChoosePixelFormat(
     hdc: ?HDC,
-    ppfd: *const gdi.PIXELFORMATDESCRIPTOR,
+    ppfd: *const gl.PIXELFORMATDESCRIPTOR,
 ) callconv(.winapi) i32;
 
 extern "gdi32" fn SetPixelFormat(
     hdc: ?HDC,
     format: i32,
-    ppfd: *const gdi.PIXELFORMATDESCRIPTOR,
+    ppfd: *const gl.PIXELFORMATDESCRIPTOR,
 ) callconv(.winapi) BOOL;
 
 extern "kernel32" fn GetProcAddress(
@@ -411,20 +411,23 @@ var g_high_surrogate: u16 = 0;
 // ---------------------------------------------------------------------------
 // Win32 modifier translation
 // ---------------------------------------------------------------------------
+fn keyState(vk: kbd.VIRTUAL_KEY) u16 {
+    return @bitCast(kbd.GetKeyState(@intFromEnum(vk)));
+}
+
 fn translateMods() ghostty.ghostty_input_mods_e {
     var mods: c_int = ghostty.GHOSTTY_MODS_NONE;
-    if (kbd.GetKeyState(@intFromEnum(kbd.VIRTUAL_KEY.VK_SHIFT)) & 0x8000 != 0)
+    if (keyState(.SHIFT) & 0x8000 != 0)
         mods |= ghostty.GHOSTTY_MODS_SHIFT;
-    if (kbd.GetKeyState(@intFromEnum(kbd.VIRTUAL_KEY.VK_CONTROL)) & 0x8000 != 0)
+    if (keyState(.CONTROL) & 0x8000 != 0)
         mods |= ghostty.GHOSTTY_MODS_CTRL;
-    if (kbd.GetKeyState(@intFromEnum(kbd.VIRTUAL_KEY.VK_MENU)) & 0x8000 != 0)
+    if (keyState(.MENU) & 0x8000 != 0)
         mods |= ghostty.GHOSTTY_MODS_ALT;
-    if (kbd.GetKeyState(@intFromEnum(kbd.VIRTUAL_KEY.VK_LWIN)) & 0x8000 != 0 or
-        kbd.GetKeyState(@intFromEnum(kbd.VIRTUAL_KEY.VK_RWIN)) & 0x8000 != 0)
+    if (keyState(.LWIN) & 0x8000 != 0 or keyState(.RWIN) & 0x8000 != 0)
         mods |= ghostty.GHOSTTY_MODS_SUPER;
-    if (kbd.GetKeyState(@intFromEnum(kbd.VIRTUAL_KEY.VK_CAPITAL)) & 0x0001 != 0)
+    if (keyState(.CAPITAL) & 0x0001 != 0)
         mods |= ghostty.GHOSTTY_MODS_CAPS;
-    if (kbd.GetKeyState(@intFromEnum(kbd.VIRTUAL_KEY.VK_NUMLOCK)) & 0x0001 != 0)
+    if (keyState(.NUMLOCK) & 0x0001 != 0)
         mods |= ghostty.GHOSTTY_MODS_NUM;
     return @intCast(mods);
 }
@@ -691,8 +694,8 @@ fn createModernGLContext(hwnd: HWND) !struct { hdc: HDC, hglrc: HGLRC } {
     const hdc = gdi.GetDC(hwnd) orelse return error.GetDCFailed;
 
     // Step 1: Set a basic pixel format and create a legacy context
-    var pfd: gdi.PIXELFORMATDESCRIPTOR = std.mem.zeroes(gdi.PIXELFORMATDESCRIPTOR);
-    pfd.nSize = @sizeOf(gdi.PIXELFORMATDESCRIPTOR);
+    var pfd: gl.PIXELFORMATDESCRIPTOR = std.mem.zeroes(gl.PIXELFORMATDESCRIPTOR);
+    pfd.nSize = @sizeOf(gl.PIXELFORMATDESCRIPTOR);
     pfd.nVersion = 1;
     pfd.dwFlags = @bitCast(@as(u32, 0x00000004 | 0x00000020 | 0x00000001)); // PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL | PFD_DOUBLEBUFFER
     pfd.iPixelType = @enumFromInt(0); // PFD_TYPE_RGBA
@@ -953,3 +956,16 @@ pub fn main() !void {
 }
 
 extern "user32" fn GetClientRect(hWnd: HWND, lpRect: *foundation.RECT) callconv(.winapi) BOOL;
+
+// ---------------------------------------------------------------------------
+// wcwidth stub for Windows
+// ---------------------------------------------------------------------------
+// Ghostty's benchmark/CodepointWidth.zig declares `extern "c" fn wcwidth`,
+// a POSIX function unavailable on Windows. The benchmark code is compiled
+// into libghostty unconditionally via main_c.zig. Provide a stub so the
+// linker resolves the symbol. The benchmark is never called at runtime.
+pub export fn wcwidth(c: u32) callconv(.c) c_int {
+    if (c == 0) return 0;
+    if (c < 0x20 or (c >= 0x7f and c < 0xa0)) return -1;
+    return 1;
+}

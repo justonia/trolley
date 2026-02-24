@@ -388,10 +388,11 @@ pub fn resolve_runtime(target: &Target) -> Result<PathBuf> {
         .replace("{version}", VERSION)
         .replace("{target}", target.as_str());
 
-    if let Ok(url) = url::Url::parse(&source) {
-        resolve_runtime_from_url(url, target)
-    } else {
-        resolve_runtime_from_path(&source)
+    match url::Url::parse(&source) {
+        Ok(url) if url.scheme() == "http" || url.scheme() == "https" => {
+            resolve_runtime_from_url(url, target)
+        }
+        _ => resolve_runtime_from_path(&source),
     }
 }
 
