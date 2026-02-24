@@ -1,7 +1,10 @@
 const std = @import("std");
 const common = @import("common");
 const ghostty = @cImport(@cInclude("ghostty.h"));
-const glfw = @cImport(@cInclude("GLFW/glfw3.h"));
+const glfw = @cImport({
+    @cDefine("GLFW_INCLUDE_NONE", {});
+    @cInclude("GLFW/glfw3.h");
+});
 const trolley = @cImport(@cInclude("trolley.h"));
 
 // Enable all log levels so we can see ghostty's internal logging.

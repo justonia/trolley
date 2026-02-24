@@ -17,7 +17,7 @@ const Platform = struct {
                 .root_source_file = b.path("src/platform/linux.zig"),
                 .renderer = .opengl,
                 .font_backend = .fontconfig_freetype,
-                .system_libs = &.{ "glfw3", "gl" },
+                .system_libs = &.{},
                 .lib_only = false,
             },
             .windows => .{
@@ -131,6 +131,67 @@ pub fn build(b: *std.Build) !void {
 
     for (platform.system_libs) |lib| {
         exe_mod.linkSystemLibrary(lib, .{});
+    }
+
+    // Build GLFW from source on Linux so the binary has no libglfw.so.3
+    // runtime dependency.  GLFW 3.4 loads X11/Wayland/GL via dlopen.
+    if (os == .linux) {
+        if (b.lazyDependency("glfw", .{})) |glfw_dep| {
+            const glfw_src = glfw_dep.path("src");
+            const glfw_include = glfw_dep.path("include");
+
+            exe_mod.addIncludePath(glfw_include);
+            exe_mod.addIncludePath(glfw_src);
+
+            // X11 headers needed for GLFW compilation (types/structs only;
+            // GLFW 3.4 loads libX11 etc. via dlopen so --as-needed means no
+            // NEEDED entry in the binary).
+            exe_mod.linkSystemLibrary("x11", .{});
+            exe_mod.linkSystemLibrary("xrandr", .{});
+            exe_mod.linkSystemLibrary("xinerama", .{});
+            exe_mod.linkSystemLibrary("xcursor", .{});
+            exe_mod.linkSystemLibrary("xi", .{});
+            exe_mod.linkSystemLibrary("xext", .{});
+
+            exe_mod.addCSourceFiles(.{
+                .root = glfw_src,
+                .files = &.{
+                    // Core
+                    "context.c",
+                    "init.c",
+                    "input.c",
+                    "monitor.c",
+                    "platform.c",
+                    "vulkan.c",
+                    "window.c",
+                    "egl_context.c",
+                    "osmesa_context.c",
+                    // Null backend (required by platform.c)
+                    "null_init.c",
+                    "null_monitor.c",
+                    "null_window.c",
+                    "null_joystick.c",
+                    // POSIX
+                    "posix_module.c",
+                    "posix_time.c",
+                    "posix_thread.c",
+                    "posix_poll.c",
+                    // Linux
+                    "linux_joystick.c",
+                    // X11
+                    "x11_init.c",
+                    "x11_monitor.c",
+                    "x11_window.c",
+                    "xkb_unicode.c",
+                    "glx_context.c",
+                },
+                .flags = &.{
+                    "-D_GLFW_X11",
+                    "-D_DEFAULT_SOURCE",
+                    "-std=c99",
+                },
+            });
+        }
     }
 
     if (os == .windows) {

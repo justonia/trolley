@@ -25,8 +25,15 @@
     in
     {
       packages = forEachSupportedSystem ({ pkgs, zigPkg, ... }: {
-        deps = pkgs.callPackage ./build.zig.zon.nix {
-          zig_0_15 = zigPkg;
+        # ghostty/build.zig.zon.nix lives in a submodule, invisible to nix
+        # flakes.  CI copies it to nix/ghostty-deps.nix before evaluation
+        # (see `just stage-zig-deps`).
+        deps = pkgs.symlinkJoin {
+          name = "zig-packages";
+          paths = [
+            (pkgs.callPackage ./nix/ghostty-deps.nix { zig_0_15 = zigPkg; })
+            (pkgs.callPackage ./nix/extra-zig-deps.nix { zig_0_15 = zigPkg; })
+          ];
         };
         default = pkgs.rustPlatform.buildRustPackage {
           pname = "trolley";
@@ -44,20 +51,36 @@
           cargoLock.lockFile = ./Cargo.lock;
           cargoBuildFlags = ["-p" "trolley"];
           env.TROLLEY_RUNTIME_SOURCE = "https://github.com/weedonandscott/trolley/releases/download/v{version}/trolley-runtime-{target}.tar.xz";
-          nativeBuildInputs = [ pkgs.pkg-config ];
+          nativeBuildInputs = [ pkgs.pkg-config ]
+            ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.makeWrapper ];
           buildInputs = [ pkgs.xz ]
             ++ lib.optionals pkgs.stdenv.hostPlatform.isDarwin [
               pkgs.darwin.apple_sdk.frameworks.Security
               pkgs.darwin.apple_sdk.frameworks.SystemConfiguration
             ];
+          # The runtime binary is self-contained (only needs libc) but GLFW
+          # loads X11/Wayland/GL at runtime via dlopen.  On NixOS these live
+          # in the Nix store, so wrap the CLI with LD_LIBRARY_PATH.
+          postFixup = lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
+            wrapProgram $out/bin/trolley \
+              --prefix LD_LIBRARY_PATH : "${lib.makeLibraryPath (with pkgs; [
+                libGL
+                libxkbcommon
+                xorg.libX11
+                xorg.libXcursor
+                xorg.libXext
+                xorg.libXi
+                xorg.libXinerama
+                xorg.libXrandr
+                wayland
+              ])}"
+          '';
         };
       });
 
       devShells = forEachSupportedSystem ({ pkgs, zigPkg, zon2nixPkg, ... }: {
         default = pkgs.mkShell {
           packages = with pkgs; [
-            claude-code
-
             # trolley build toolchain
             zigPkg
             pkg-config
@@ -77,23 +100,7 @@
             zon2nixPkg
           ]
           ++ lib.optionals stdenv.hostPlatform.isLinux [
-            # libghostty native deps
-            bzip2
-            expat
-            fontconfig
-            freetype
-            harfbuzz
-            libGL
-            libpng
-            libxml2
-            oniguruma
-            simdutf
-            zlib
-            glslang
-            spirv-cross
-
-            # X11 / windowing (for GLFW wrapper)
-            glfw
+            # X11 headers (needed at compile time for GLFW source build)
             libxkbcommon
             libx11
             libxcursor
@@ -103,7 +110,21 @@
             libxrandr
           ];
 
-          shellHook = lib.optionalString pkgs.stdenv.hostPlatform.isDarwin ''
+          shellHook = lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
+            # GLFW loads X11/Wayland/GL at runtime via dlopen.  On NixOS
+            # these live in the Nix store, so set LD_LIBRARY_PATH.
+            export LD_LIBRARY_PATH="${lib.makeLibraryPath (with pkgs; [
+              libGL
+              libxkbcommon
+              xorg.libX11
+              xorg.libXcursor
+              xorg.libXext
+              xorg.libXi
+              xorg.libXinerama
+              xorg.libXrandr
+              wayland
+            ])}''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          '' + lib.optionalString pkgs.stdenv.hostPlatform.isDarwin ''
             # Ghostty's build.zig eagerly builds for iOS even when we only need
             # macOS. Nix only ships a macOS SDK, so we unset Nix's SDK env vars
             # and let Zig discover the system Xcode which has all Apple SDKs.

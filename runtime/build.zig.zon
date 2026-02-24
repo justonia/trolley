@@ -10,6 +10,11 @@
             .hash = "zigwin32-25.0.28-preview-AAAAAB6N5AP3iLHsHKzg7r_aiDyYWo92qLOAG2eBLWhE",
             .lazy = true,
         },
+        .glfw = .{
+            .url = "https://github.com/glfw/glfw/archive/refs/tags/3.4.tar.gz",
+            .hash = "N-V-__8AAL40TADEbrysYHBl-UIZO4KiG4chP8pLDVDINGH4",
+            .lazy = true,
+        },
     },
     .paths = .{
         "build.zig",

@@ -160,7 +160,10 @@ build-runtime *flags:
     # Step 1: zig build (libghostty + exe on Linux/Windows, libghostty only on macOS)
     zig_system=""
     if [ -n "$system" ]; then zig_system="--system $system"; fi
-    cd runtime && zig build $zig_target $optimize $zig_system -Dconfig-lib="$config_lib" --prefix "$prefix"
+    # Build all C deps from source so the binary only needs libc at runtime.
+    # (--system enables all integrations by default; explicitly disable them.)
+    sys_flags="-fno-sys=freetype -fno-sys=harfbuzz -fno-sys=fontconfig -fno-sys=oniguruma -fno-sys=libpng -fno-sys=zlib"
+    cd runtime && zig build $zig_target $optimize $zig_system $sys_flags -Dconfig-lib="$config_lib" --prefix "$prefix"
 
     # Step 2: macOS needs a separate Swift build for the executable
     is_macos=false
@@ -304,6 +307,18 @@ bump version:
 # Clean font cache
 clean-fonts:
     rm -rf trolley/cache/fonts
+
+# Pre-fetch Zig dependencies for offline/cached builds.
+# Copies ghostty's dep file out of the submodule (nix flakes can't see
+# inside submodules), then builds the combined dep store via nix.
+# Outputs the store path on stdout.
+build-deps:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cp ghostty/build.zig.zon.nix nix/ghostty-deps.nix
+    git add -f nix/ghostty-deps.nix nix/extra-zig-deps.nix
+    nix build -L -v .#deps
+    readlink ./result
 
 # Clean all build artifacts
 clean:
