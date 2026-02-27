@@ -106,8 +106,13 @@ jobs:
         id: deps
         run: echo "deps=$(just build-deps)" >> "$GITHUB_OUTPUT"
 
-      - name: Build and package
-        run: nix develop -L -v -c just release --target ${{ matrix.target }} --system ${{ steps.deps.outputs.deps }}
+      # Build the CLI outside the Nix shell so it links against macOS
+      # system libraries instead of Nix store paths.
+      - name: Build and package CLI
+        run: just release-cli --target ${{ matrix.target }}
+
+      - name: Build and package runtime
+        run: nix develop -L -v -c just release-runtime --target ${{ matrix.target }} --system ${{ steps.deps.outputs.deps }}
 
       - name: Sanity test
         run: nix develop -L -v -c just sanity-test --target ${{ matrix.target }}
