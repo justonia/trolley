@@ -324,6 +324,13 @@ sanity-test *flags:
     rm -rf "$test_dir"
     trap 'rm -rf "$test_dir"' EXIT
 
+    echo "==> trolley --version"
+    cli_version=$("$cli" --version)
+    expected="trolley version $(cat VERSION | tr -d '[:space:]')"
+    if [ "$cli_version" != "$expected" ]; then
+        echo "Error: --version output '$cli_version' does not match expected '$expected'" >&2; exit 1
+    fi
+
     echo "==> trolley init .sanity-test/project"
     "$cli" init "$test_dir/project"
 

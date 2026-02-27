@@ -5,7 +5,7 @@ use clap::{Parser, Subcommand};
 use trolley_config::{Format, Target};
 
 #[derive(Parser)]
-#[command(name = "trolley", about = "Run terminal apps anywhere")]
+#[command(name = "trolley", about = "Run terminal apps anywhere", version = concat!("version ", env!("TROLLEY_VERSION")))]
 struct Cli {
     #[command(subcommand)]
     command: Command,
