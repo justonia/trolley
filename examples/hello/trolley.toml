@@ -29,3 +29,4 @@ variables = { HELLO_FROM = "trolley" }
 
 [ghostty]
 font-size = 12
+title = "🚃 Trolley Express — Hello World Terminal 🌍"

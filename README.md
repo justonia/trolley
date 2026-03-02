@@ -180,6 +180,21 @@ font-size = 14
 theme = "dracula"
 ```
 
+### Window title
+
+You can set a fixed window title for your application via the Ghostty `title`
+config:
+
+```toml
+[ghostty]
+title = "My App"
+```
+
+This sets the native window title on all platforms. When set, it overrides any
+title escape sequences sent by your TUI program. If your TUI doesn't set a title
+itself, the window would otherwise show a default — so it's generally a good idea
+to set one.
+
 ## Package formats
 
 | Platform | Default formats                       |
