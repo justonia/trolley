@@ -687,6 +687,7 @@ mod tests {
         let bytes = assemble_config(dir.path(), &manifest, "app_core", &[]).unwrap();
         let rendered = String::from_utf8(bytes).unwrap();
 
+        assert!(rendered.contains("working-directory = inherit\n"));
         assert!(rendered.contains("command = direct:./app_core\n"));
     }
 
