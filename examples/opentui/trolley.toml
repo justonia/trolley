@@ -1,0 +1,21 @@
+[app]
+identifier = "com.example.opentui"
+display_name = "OpenTUI Example"
+slug = "opentui"
+version = "0.1.0"
+
+[linux]
+binaries = { x86_64 = "bin/opentui" }
+
+[macos]
+binaries = { aarch64 = "bin/opentui", x86_64 = "bin/opentui" }
+
+[gui]
+initial_width = 700
+initial_height = 500
+min_width = 400
+min_height = 300
+
+[ghostty]
+font-size = 13
+title = "Trolley - OpenTUI Key Viewer"

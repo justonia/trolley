@@ -181,6 +181,7 @@ fn closeSurfaceCallback(_: ?*anyopaque, _: bool) callconv(.c) void {
 // ---------------------------------------------------------------------------
 var g_pending_key_event: ?ghostty.ghostty_input_key_s = null;
 var g_pending_text_buf: [5]u8 = undefined;
+var g_key_text_buf: [5]u8 = undefined;
 
 fn keyCallback(
     _: ?*glfw.GLFWwindow,
@@ -190,7 +191,6 @@ fn keyCallback(
     glfw_mods: c_int,
 ) callconv(.c) void {
     const surface = g_surface orelse return;
-    _ = glfw_key;
 
     const action: ghostty.ghostty_input_action_e = switch (glfw_action) {
         glfw.GLFW_PRESS => ghostty.GHOSTTY_ACTION_PRESS,
@@ -208,13 +208,47 @@ fn keyCallback(
     const evdev_offset: c_int = if (glfw.glfwGetPlatform() == glfw.GLFW_PLATFORM_WAYLAND) 8 else 0;
     const keycode: u32 = if (scancode >= 0) @intCast(scancode + evdev_offset) else 0;
 
+    // Get the unshifted codepoint from GLFW. This is the character the key
+    // would produce without any modifiers, equivalent to GTK's
+    // keyval_unicode_unshifted. Required for Kitty keyboard protocol encoding
+    // and legacy ctrl+shift+letter handling.
+    const unshifted_codepoint: u32 = uc: {
+        const key_name = glfw.glfwGetKeyName(glfw_key, scancode);
+        if (key_name) |name_ptr| {
+            const name: [*:0]const u8 = name_ptr;
+            const len = std.unicode.utf8ByteSequenceLength(name[0]) catch break :uc 0;
+            const cp = std.unicode.utf8Decode(name[0..len]) catch break :uc 0;
+            break :uc @intCast(cp);
+        }
+        break :uc 0;
+    };
+
+    // When ctrl is held, GLFW never fires charCallback, so we must
+    // synthesize the text here. Without text, the legacy encoder's CSIu
+    // path (for ctrl+shift+letter) silently drops the event.
+    const has_ctrl = (glfw_mods & glfw.GLFW_MOD_CONTROL) != 0;
+    const text: ?[*]const u8 = txt: {
+        if (!has_ctrl) break :txt null;
+        if (unshifted_codepoint < 0x20) break :txt null;
+        var cp: u21 = std.math.cast(u21, unshifted_codepoint) orelse break :txt null;
+        const has_shift = (glfw_mods & glfw.GLFW_MOD_SHIFT) != 0;
+        if (has_shift and cp >= 'a' and cp <= 'z') {
+            cp = cp - 'a' + 'A';
+        }
+        const len = std.unicode.utf8Encode(cp, &g_key_text_buf) catch break :txt null;
+        if (len < g_key_text_buf.len) {
+            g_key_text_buf[len] = 0;
+        }
+        break :txt &g_key_text_buf;
+    };
+
     const key_event: ghostty.ghostty_input_key_s = .{
         .action = action,
         .mods = mods,
         .consumed_mods = ghostty.GHOSTTY_MODS_NONE,
         .keycode = keycode,
-        .text = null,
-        .unshifted_codepoint = 0,
+        .text = text,
+        .unshifted_codepoint = unshifted_codepoint,
         .composing = false,
     };
 

@@ -115,6 +115,12 @@
             # CI
             act
             zon2nixPkg
+
+            # OpenTUI example
+            bun
+
+            # Bubbletea example
+            go
           ]
           ++ lib.optionals stdenv.hostPlatform.isLinux [
             # X11 headers (needed at compile time for GLFW source build)
