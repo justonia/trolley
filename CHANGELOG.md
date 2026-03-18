@@ -1,16 +1,17 @@
 # Changelog
 
-## Unreleased
+## 0.6.0
 
 ### Runtime
 
-- [all] Pass key modifiers to the running TUI
-- [all] Update Ghostty
-- [windows] Fix runtime on windows so it launches
+- [all] Pass key modifiers to the running TUI (#15)
+- [all] Update Ghostty (#16)
+- [windows] Fix runtime on windows so it launches (#16)
 
 ### CLI
 
-- [all] The `[ghostty]` config now expands arrays into repeated key lines.
+- [all] Ensure Ghostty working directory is cwd (#13)
+- [all] The `[ghostty]` config now expands arrays into repeated key lines. (#15)
   For example, the following:
 
   ```toml
