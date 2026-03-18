@@ -1,5 +1,31 @@
 # Changelog
 
+## Unreleased
+
+### Runtime
+
+- [all] Pass key modifiers to the running TUI
+
+### CLI
+
+- [all] The `[ghostty]` config now expands arrays into repeated key lines.
+  For example, the following:
+
+  ```toml
+  [ghostty]
+  keybind = [
+      "ctrl+==increase_font_size:1",
+      "ctrl+-=decrease_font_size:1",
+  ]
+  ```
+
+  produces:
+
+  ```
+  keybind = ctrl+==increase_font_size:1
+  keybind = ctrl+-=decrease_font_size:1
+  ```
+
 ## 0.5.0
 
 ### Runtime
