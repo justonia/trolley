@@ -180,6 +180,15 @@ font-size = 14
 theme = "dracula"
 ```
 
+### Ghostty Logging
+
+To see Ghostty log output when using `trolley run`, add this to your `variables`: 
+```toml
+variables = { 
+  GHOSTTY_LOG = "stderr" 
+}
+```
+
 ### Window title
 
 You can set a fixed window title for your application via the Ghostty `title`
