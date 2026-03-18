@@ -1,0 +1,21 @@
+[app]
+identifier = "com.example.bubbletea"
+display_name = "Bubble Tea Example"
+slug = "bubbletea"
+version = "0.1.0"
+
+[linux]
+binaries = { x86_64 = "bin/bubbletea" }
+
+[macos]
+binaries = { aarch64 = "bin/bubbletea", x86_64 = "bin/bubbletea" }
+
+[gui]
+initial_width = 700
+initial_height = 500
+min_width = 400
+min_height = 300
+
+[ghostty]
+font-size = 13
+title = "Trolley - Bubble Tea Key Viewer"

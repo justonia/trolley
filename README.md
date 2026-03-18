@@ -171,13 +171,19 @@ variables = { MY_VAR = "value" }
 ### `[ghostty]` -- optional
 
 Pass-through configuration for the Ghostty terminal engine. Accepts any
-Ghostty config key with a scalar value (string, integer, float, or boolean).
+Ghostty config key with a scalar value (string, integer, float, or boolean)
+or an array of scalars. Arrays are expanded into repeated key lines, which is
+how Ghostty handles multi-value options like `keybind`.
 Note that configs meant for Ghostty's GUI will not take effect (obviously).
 
 ```toml
 [ghostty]
 font-size = 14
 theme = "dracula"
+keybind = [
+    "ctrl+==increase_font_size:1",
+    "ctrl+-=decrease_font_size:1",
+]
 ```
 
 ### Ghostty Logging
@@ -203,6 +209,27 @@ This sets the native window title on all platforms. When set, it overrides any
 title escape sequences sent by your TUI program. If your TUI doesn't set a title
 itself, the window would otherwise show a default — so it's generally a good idea
 to set one.
+
+> **Tip:** Trolley clears all default Ghostty keybindings so they don't
+> interfere with your TUI. If you want to re-add some of them (e.g. zoom),
+> use the `keybind` array:
+>
+> ```toml
+> [ghostty]
+> keybind = [
+>     "ctrl+==increase_font_size:1",
+>     "ctrl+plus=increase_font_size:1",
+>     "ctrl+-=decrease_font_size:1",
+>     "ctrl+0=reset_font_size",
+>     "super+==increase_font_size:1",
+>     "super+plus=increase_font_size:1",
+>     "super+-=decrease_font_size:1",
+>     "super+0=reset_font_size",
+> ]
+> ```
+>
+> See [Ghostty's keybind docs](https://ghostty.org/docs/config/keybind) for
+> the full list of available actions.
 
 ## Package formats
 
