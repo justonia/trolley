@@ -101,13 +101,15 @@ func readClipboardCallback(
     _ userdata: UnsafeMutableRawPointer?,
     _ loc: ghostty_clipboard_e,
     _ state: UnsafeMutableRawPointer?
-) {
-    guard let surface = gSurface else { return }
+) -> Bool {
+    guard let surface = gSurface else { return false }
     if let str = NSPasteboard.general.string(forType: .string) {
         str.withCString { ptr in
             ghostty_surface_complete_clipboard_request(surface, ptr, state, false)
         }
+        return true
     }
+    return false
 }
 
 func confirmReadClipboardCallback(

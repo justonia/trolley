@@ -197,8 +197,12 @@ var g_window_config: trolley.TrolleyGuiConfig = .{
 // ---------------------------------------------------------------------------
 // WGL ↔ ghostty OpenGL context bridge
 // ---------------------------------------------------------------------------
-fn makeContextCurrent(_: ?*anyopaque) callconv(.c) void {
-    _ = wglMakeCurrent(g_hdc, g_hglrc);
+fn makeContextCurrent(userdata: ?*anyopaque) callconv(.c) void {
+    if (userdata != null) {
+        _ = wglMakeCurrent(g_hdc, g_hglrc);
+    } else {
+        _ = wglMakeCurrent(null, null);
+    }
 }
 
 fn swapBuffersCb(_: ?*anyopaque) callconv(.c) void {
@@ -308,6 +312,37 @@ fn readClipboardCallback(
     _: ?*anyopaque,
     _: ghostty.ghostty_clipboard_e,
     state: ?*anyopaque,
+) callconv(.c) bool {
+    const surface = g_surface orelse return false;
+    const hwnd = g_hwnd orelse return false;
+
+    if (openClipboard(hwnd)) {
+        defer closeClipboard();
+        const CF_UNICODETEXT = 13;
+        const handle = GetClipboardData(CF_UNICODETEXT);
+        if (handle) |h| {
+            const ptr = GlobalLock(h);
+            if (ptr) |p| {
+                defer _ = GlobalUnlock(h);
+                const wide: [*:0]const u16 = @ptrCast(@alignCast(p));
+                const utf8 = std.unicode.utf16LeToUtf8Alloc(std.heap.page_allocator, std.mem.span(wide)) catch return false;
+                defer std.heap.page_allocator.free(utf8);
+                // Need null-terminated string for ghostty
+                const z = std.heap.page_allocator.dupeZ(u8, utf8) catch return false;
+                defer std.heap.page_allocator.free(z);
+                ghostty.ghostty_surface_complete_clipboard_request(surface, z.ptr, state, false);
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+fn confirmReadClipboardCallback(
+    _: ?*anyopaque,
+    _: [*c]const u8,
+    state: ?*anyopaque,
+    _: ghostty.ghostty_clipboard_request_e,
 ) callconv(.c) void {
     const surface = g_surface orelse return;
     const hwnd = g_hwnd orelse return;
@@ -323,22 +358,12 @@ fn readClipboardCallback(
                 const wide: [*:0]const u16 = @ptrCast(@alignCast(p));
                 const utf8 = std.unicode.utf16LeToUtf8Alloc(std.heap.page_allocator, std.mem.span(wide)) catch return;
                 defer std.heap.page_allocator.free(utf8);
-                // Need null-terminated string for ghostty
                 const z = std.heap.page_allocator.dupeZ(u8, utf8) catch return;
                 defer std.heap.page_allocator.free(z);
                 ghostty.ghostty_surface_complete_clipboard_request(surface, z.ptr, state, false);
             }
         }
     }
-}
-
-fn confirmReadClipboardCallback(
-    _: ?*anyopaque,
-    _: [*c]const u8,
-    state: ?*anyopaque,
-    _: ghostty.ghostty_clipboard_request_e,
-) callconv(.c) void {
-    readClipboardCallback(null, ghostty.GHOSTTY_CLIPBOARD_STANDARD, state);
 }
 
 fn writeClipboardCallback(
@@ -406,6 +431,7 @@ fn closeClipboard() void {
 // ---------------------------------------------------------------------------
 var g_pending_key_event: ?ghostty.ghostty_input_key_s = null;
 var g_pending_text_buf: [5]u8 = undefined;
+var g_key_text_buf: [5]u8 = undefined;
 var g_high_surrogate: u16 = 0;
 
 // ---------------------------------------------------------------------------
@@ -441,6 +467,16 @@ fn extractScancode(lParam: LPARAM) u32 {
     return scan | (extended * 0xe000);
 }
 
+/// Derive the unshifted character for a virtual key code using MapVirtualKeyW.
+/// Returns 0 for non-printable keys. Dead-key bit is masked off.
+fn unshiftedCodepoint(vk_wparam: WPARAM) u32 {
+    const vk: u32 = @intCast(vk_wparam & 0xFFFF);
+    const mapped = kbd.MapVirtualKeyW(vk, wam.MAPVK_VK_TO_CHAR);
+    var ch = mapped & 0x7FFFFFFF;
+    if (ch >= 'A' and ch <= 'Z') ch = ch - 'A' + 'a';
+    return if (ch >= 0x20) ch else 0;
+}
+
 // ---------------------------------------------------------------------------
 // Window procedure
 // ---------------------------------------------------------------------------
@@ -455,13 +491,38 @@ fn windowProc(hwnd: HWND, msg: u32, wParam: WPARAM, lParam: LPARAM) callconv(.wi
             else
                 ghostty.GHOSTTY_ACTION_PRESS;
 
+            // Get the unshifted codepoint from MapVirtualKeyW. This is the
+            // character the key would produce without any modifiers. Required
+            // for Kitty keyboard protocol encoding and legacy ctrl+shift+letter
+            // handling.
+            const unshifted_codepoint = unshiftedCodepoint(wParam);
+
+            // When ctrl is held, Windows never sends WM_CHAR, so we must
+            // synthesize the text here. Without text, the legacy encoder's
+            // CSIu path (for ctrl+shift+letter) silently drops the event.
+            const has_ctrl = (keyState(.CONTROL) & 0x8000) != 0;
+            const text: ?[*]const u8 = txt: {
+                if (!has_ctrl) break :txt null;
+                if (unshifted_codepoint < 0x20) break :txt null;
+                var cp: u21 = std.math.cast(u21, unshifted_codepoint) orelse break :txt null;
+                const has_shift = (keyState(.SHIFT) & 0x8000) != 0;
+                if (has_shift and cp >= 'a' and cp <= 'z') {
+                    cp = cp - 'a' + 'A';
+                }
+                const len = std.unicode.utf8Encode(cp, &g_key_text_buf) catch break :txt null;
+                if (len < g_key_text_buf.len) {
+                    g_key_text_buf[len] = 0;
+                }
+                break :txt &g_key_text_buf;
+            };
+
             const key_event: ghostty.ghostty_input_key_s = .{
                 .action = action,
                 .mods = mods,
                 .consumed_mods = ghostty.GHOSTTY_MODS_NONE,
                 .keycode = keycode,
-                .text = null,
-                .unshifted_codepoint = 0,
+                .text = text,
+                .unshifted_codepoint = unshifted_codepoint,
                 .composing = false,
             };
 
@@ -476,6 +537,7 @@ fn windowProc(hwnd: HWND, msg: u32, wParam: WPARAM, lParam: LPARAM) callconv(.wi
             const surface = g_surface orelse return wam.DefWindowProcW(hwnd, msg, wParam, lParam);
             const keycode = extractScancode(lParam);
             const mods = translateMods();
+            const unshifted_codepoint = unshiftedCodepoint(wParam);
 
             const key_event: ghostty.ghostty_input_key_s = .{
                 .action = ghostty.GHOSTTY_ACTION_RELEASE,
@@ -483,7 +545,7 @@ fn windowProc(hwnd: HWND, msg: u32, wParam: WPARAM, lParam: LPARAM) callconv(.wi
                 .consumed_mods = ghostty.GHOSTTY_MODS_NONE,
                 .keycode = keycode,
                 .text = null,
-                .unshifted_codepoint = 0,
+                .unshifted_codepoint = unshifted_codepoint,
                 .composing = false,
             };
 
@@ -798,7 +860,7 @@ pub fn main() !void {
     const class_name = std.unicode.utf8ToUtf16LeStringLiteral("TrolleyWindow");
 
     const wc: wam.WNDCLASSW = .{
-        .style = @bitCast(@as(u32, 0)), // No CS_HREDRAW | CS_VREDRAW — OpenGL handles repaints
+        .style = @bitCast(@as(u32, 0x0020)), // CS_OWNDC — private DC for persistent OpenGL context
         .lpfnWndProc = &windowProc,
         .cbClsExtra = 0,
         .cbWndExtra = 0,
@@ -905,7 +967,7 @@ pub fn main() !void {
             .get_proc_address = @ptrCast(&getProcAddress),
             .make_context_current = &makeContextCurrent,
             .swap_buffers = &swapBuffersCb,
-            .gl_userdata = null,
+            .gl_userdata = @ptrCast(g_hglrc),
         },
     };
 
