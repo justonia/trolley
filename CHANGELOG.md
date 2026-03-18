@@ -5,6 +5,8 @@
 ### Runtime
 
 - [all] Pass key modifiers to the running TUI
+- [all] Update Ghostty
+- [windows] Fix runtime on windows so it launches
 
 ### CLI
 

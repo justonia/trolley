@@ -7,7 +7,7 @@
 Trolley lets you bundle any TUI executable together with a terminal emulator
 runtime, allowing you to distribute TUI applications to non-technical users.
 
-Trolley targets Linux and MacOS, with Windows compiling but untested.
+Trolley targets Linux and MacOS, and Windows.
 
 Other targets like iOS and Android are possible. Please open an issue if 
 interested.
@@ -117,7 +117,7 @@ window and kiosk behavior.
 |----------|------------------|-----------|----------|
 | macOS    | Swift (AppKit)   | NSWindow  | Metal    |
 | Linux    | Zig (GLFW)       | GLFW      | OpenGL   |
-| Windows  | Zig (Win32)      | GLFW      | OpenGL   |
+| Windows  | Zig (Win32)      | Win32     | OpenGL   |
 
 ### Development Prerequisites
 
