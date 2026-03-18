@@ -125,14 +125,16 @@ fn readClipboardCallback(
     _: ?*anyopaque,
     _: ghostty.ghostty_clipboard_e,
     state: ?*anyopaque,
-) callconv(.c) void {
-    const surface = g_surface orelse return;
+) callconv(.c) bool {
+    const surface = g_surface orelse return false;
     if (g_window) |win| {
         const clip = glfw.glfwGetClipboardString(win);
         if (clip) |str| {
             ghostty.ghostty_surface_complete_clipboard_request(surface, str, state, false);
+            return true;
         }
     }
+    return false;
 }
 
 fn confirmReadClipboardCallback(
