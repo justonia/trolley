@@ -19,3 +19,13 @@ min_height = 300
 [ghostty]
 font-size = 13
 title = "Trolley - OpenTUI Key Viewer"
+keybind = [
+    "ctrl+==increase_font_size:1",
+    "ctrl+plus=increase_font_size:1",
+    "ctrl+-=decrease_font_size:1",
+    "ctrl+0=reset_font_size",
+    "super+==increase_font_size:1",
+    "super+plus=increase_font_size:1",
+    "super+-=decrease_font_size:1",
+    "super+0=reset_font_size",
+]

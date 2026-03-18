@@ -623,14 +623,24 @@ impl Config {
             }
         }
 
-        // [ghostty] values must be scalars (no arrays or tables)
+        // [ghostty] values must be scalars or arrays of scalars (no tables)
         for (key, value) in &self.ghostty {
             match value {
-                toml::Value::Array(_) | toml::Value::Table(_) => {
+                toml::Value::Table(_) => {
                     errors.push(format!(
                         "[ghostty] key \"{key}\" has an unsupported type \
-                         (only strings, integers, floats, and booleans are allowed)"
+                         (only strings, integers, floats, booleans, and arrays of these are allowed)"
                     ));
+                }
+                toml::Value::Array(arr) => {
+                    for (i, item) in arr.iter().enumerate() {
+                        if matches!(item, toml::Value::Array(_) | toml::Value::Table(_)) {
+                            errors.push(format!(
+                                "[ghostty] key \"{key}\"[{i}] has an unsupported type \
+                                 (array elements must be strings, integers, floats, or booleans)"
+                            ));
+                        }
+                    }
                 }
                 _ => {}
             }
@@ -715,19 +725,32 @@ fn validate_slug(slug: &str) -> std::result::Result<(), String> {
 }
 
 /// Serialize the `[ghostty]` section as ghostty config lines ("key = value\n").
+///
+/// Scalar values produce a single line. Array values produce one line per
+/// element, allowing repeated keys (e.g. multiple `keybind` entries).
 pub fn ghostty_config_string(manifest: &Config) -> String {
     let mut out = String::new();
     for (key, value) in &manifest.ghostty {
         match value {
-            toml::Value::String(s) => out.push_str(&format!("{key} = {s}\n")),
-            toml::Value::Integer(i) => out.push_str(&format!("{key} = {i}\n")),
-            toml::Value::Float(f) => out.push_str(&format!("{key} = {f}\n")),
-            toml::Value::Boolean(b) => out.push_str(&format!("{key} = {b}\n")),
-            // Arrays and tables are not valid ghostty config values — skip.
-            _ => {}
+            toml::Value::Array(arr) => {
+                for item in arr {
+                    write_ghostty_value(&mut out, key, item);
+                }
+            }
+            _ => write_ghostty_value(&mut out, key, value),
         }
     }
     out
+}
+
+fn write_ghostty_value(out: &mut String, key: &str, value: &toml::Value) {
+    match value {
+        toml::Value::String(s) => out.push_str(&format!("{key} = {s}\n")),
+        toml::Value::Integer(i) => out.push_str(&format!("{key} = {i}\n")),
+        toml::Value::Float(f) => out.push_str(&format!("{key} = {f}\n")),
+        toml::Value::Boolean(b) => out.push_str(&format!("{key} = {b}\n")),
+        _ => {}
+    }
 }
 
 // ---------------------------------------------------------------------------
