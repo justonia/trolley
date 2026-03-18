@@ -138,6 +138,12 @@ extern "kernel32" fn LoadLibraryA(
     lpLibFileName: [*:0]const u8,
 ) callconv(.winapi) ?*anyopaque;
 
+extern "kernel32" fn AttachConsole(
+    dwProcessId: u32,
+) callconv(.winapi) BOOL;
+
+const ATTACH_PARENT_PROCESS: u32 = 0xFFFFFFFF;
+
 // WGL extension function types
 const WglCreateContextAttribsARB = *const fn (
     hdc: ?HDC,
@@ -831,6 +837,11 @@ fn createModernGLContext(hwnd: HWND) !struct { hdc: HDC, hglrc: HGLRC } {
 // Main
 // ---------------------------------------------------------------------------
 pub fn main() !void {
+    // When launched from a terminal (e.g. `just run`), re-attach to the
+    // parent console so stdout/stderr remain visible for debugging.
+    // Fails silently when double-clicked or launched from an installer shortcut.
+    _ = AttachConsole(ATTACH_PARENT_PROCESS);
+
     // DPI awareness
     _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
 

@@ -261,6 +261,8 @@ pub fn build(b: *std.Build) !void {
         .name = "trolley",
         .root_module = exe_mod,
     });
+    // On Windows, use the GUI subsystem so no console window is spawned.
+    if (os == .windows) exe.subsystem = .Windows;
     // GLFW loads X11/Wayland/GL via dlopen at runtime — the system libs
     // linked above are only needed for headers, not actual linking.
     // When cross-compiling, the host .so files may reference glibc symbols
