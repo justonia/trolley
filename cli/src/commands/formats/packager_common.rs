@@ -106,7 +106,11 @@ fn build_packager_config(
     packager_config.target_triple = Some(manifest.target.target_triple().to_string());
     packager_config.description = Some(config.app.display_name.clone());
     packager_config.resources = Some(resource_files);
-    packager_config.icons = config.app.icon.as_ref().map(|icon| vec![icon.clone()]);
+    packager_config.icons = if config.app.icons.is_empty() {
+        None
+    } else {
+        Some(config.app.icons.clone())
+    };
 
     if let BundleVariant::Linux { .. } = manifest.variant {
         let mut deb = cargo_packager::config::DebianConfig::default();

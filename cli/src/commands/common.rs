@@ -586,7 +586,7 @@ mod tests {
                 display_name: "Test".into(),
                 slug: "test".into(),
                 version: "1.0.0".into(),
-                icon: None,
+                icons: vec![],
             },
             linux: Some(Linux {
                 binaries: BTreeMap::from([(Arch::X86_64, "my-app".into())]),

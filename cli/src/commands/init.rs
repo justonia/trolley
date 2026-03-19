@@ -56,7 +56,7 @@ pub fn run(path: Option<String>) -> Result<()> {
             display_name: dir_name.clone(),
             slug: dir_name,
             version: "0.1.0".into(),
-            icon: None,
+            icons: vec![],
         },
         linux,
         macos,

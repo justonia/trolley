@@ -23,7 +23,9 @@ xz2 = "0.1"
 ttf-parser = "0.25"
 flate2 = "1"
 rpm = "0.16"
-cargo-packager = { version = "0.11.8", default-features = false }
+png = "0.17"
+glob = "0.3"
+cargo-packager = { version = "0.11.8", default-features = false, features = ["rustls-tls"] }
 
 
 [dev-dependencies]

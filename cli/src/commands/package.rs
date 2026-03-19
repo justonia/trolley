@@ -17,6 +17,7 @@ pub fn run(
     runtime: &Path,
     bundle_only: bool,
     formats: Option<Vec<Format>>,
+    skip_failed_formats: bool,
 ) -> Result<PathBuf> {
     let formats = match formats {
         Some(formats) => formats,
@@ -156,7 +157,7 @@ pub fn run(
     // Build packages unless bundle-only
     if !bundle_only && !formats.is_empty() {
         println!();
-        super::formats::build_formats(&formats, &bundle_dir, &dist_dir, &ctx.config, &manifest)?;
+        super::formats::build_formats(&formats, &bundle_dir, &dist_dir, &ctx.config, &manifest, skip_failed_formats)?;
     }
 
     Ok(bundle_dir)

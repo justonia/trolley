@@ -1,6 +1,7 @@
+use std::ffi::OsStr;
 use std::fs::{self, File};
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use rpm::{FileMode, FileOptions};
@@ -8,6 +9,33 @@ use trolley_config::{Config, rpm_arch};
 use walkdir::WalkDir;
 
 use super::super::common::{BundleManifest, BundleVariant};
+
+/// Resolve PNG icon paths from the config's icon globs.
+fn resolve_png_icons(config: &Config) -> Result<Vec<PathBuf>> {
+    let mut pngs = Vec::new();
+    for pattern in &config.app.icons {
+        for entry in glob::glob(pattern)
+            .with_context(|| format!("invalid icon glob: {pattern}"))?
+        {
+            let path = entry.with_context(|| format!("reading icon glob: {pattern}"))?;
+            if path.extension() == Some(OsStr::new("png")) {
+                pngs.push(path);
+            }
+        }
+    }
+    Ok(pngs)
+}
+
+/// Read PNG dimensions from file header.
+fn png_dimensions(path: &Path) -> Result<(u32, u32)> {
+    let file = File::open(path)
+        .with_context(|| format!("opening icon {}", path.display()))?;
+    let decoder = png::Decoder::new(file);
+    let reader = decoder.read_info()
+        .with_context(|| format!("reading PNG header of {}", path.display()))?;
+    let info = reader.info();
+    Ok((info.width, info.height))
+}
 
 pub fn build(
     bundle_dir: &Path,
@@ -104,6 +132,19 @@ pub fn build(
         FileOptions::new(format!("/usr/bin/{}", config.app.slug))
             .mode(FileMode::Regular { permissions: 0o755 }),
     )?;
+
+    // Install PNG icons into /usr/share/icons/hicolor/<WxH>/apps/<slug>.png
+    for icon_path in resolve_png_icons(config)? {
+        let (width, height) = png_dimensions(&icon_path)?;
+        let dest = format!(
+            "/usr/share/icons/hicolor/{width}x{height}/apps/{}.png",
+            config.app.slug
+        );
+        builder = builder.with_file(
+            &icon_path,
+            FileOptions::new(dest).mode(FileMode::Regular { permissions: 0o644 }),
+        )?;
+    }
 
     let pkg = builder.build()?;
 

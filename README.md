@@ -75,6 +75,7 @@ identifier = "com.example.my-app"
 display_name = "My App"
 slug = "my-app"
 version = "0.1.0"
+icons = ["assets/icon.png"]
 
 [linux]
 binaries = { x86_64 = "target/release/my-app" }
@@ -136,7 +137,7 @@ The manifest file `trolley.toml` has the following sections:
 | `display_name` | Human-readable application name            |
 | `slug`         | Filesystem-safe name (lowercase, hyphens)  |
 | `version`      | Version string                             |
-| `icon`         | Path to icon file (optional)               |
+| `icons`        | List of icon paths/globs ([see Icons](#icons)) |
 
 ### `[linux]`, `[macos]`, `[windows]` -- at least one required
 
@@ -231,6 +232,34 @@ to set one.
 > See [Ghostty's keybind docs](https://ghostty.org/docs/config/keybind) for
 > the full list of available actions.
 
+## Icons
+
+Icons are not needed for `trolley run` or `--bundle-only`, but most package
+formats require them. Provide icon paths or globs in the `[app]` section:
+
+```toml
+[app]
+icons = ["assets/icon.png"]
+```
+
+Different formats need different icon types:
+
+| Format              | Icon type     | Required |
+|---------------------|---------------|----------|
+| AppImage            | Square `.png` | Yes      |
+| .deb, .rpm, pacman  | `.png`        | No       |
+| NSIS (Windows)      | `.ico`        | No       |
+| .app, .dmg (macOS)  | `.icns`       | No       |
+| .tar.gz             | --            | --       |
+
+To support all platforms, provide multiple icons:
+
+```toml
+icons = ["assets/icon.png", "assets/icon.ico", "assets/icon.icns"]
+```
+
+Glob patterns are also supported (e.g. `"assets/icon.*"`).
+
 ## Package formats
 
 | Platform | Default formats                       |
@@ -243,6 +272,13 @@ Select specific formats with `--formats`:
 
 ```
 trolley package --formats appimage,deb
+```
+
+Use `--skip-failed-formats` to continue building remaining formats if one fails
+(e.g. when icons are missing for some formats):
+
+```
+trolley package --skip-failed-formats
 ```
 
 ## BUNDLING != SANDBOXING

@@ -35,6 +35,9 @@ enum Command {
         /// Package formats to build (default: all for target). Comma-separated.
         #[arg(long, value_enum, value_delimiter = ',')]
         formats: Option<Vec<Format>>,
+        /// Continue building remaining formats if one fails.
+        #[arg(long)]
+        skip_failed_formats: bool,
     },
     /// Bundle then run the result
     Run {
@@ -55,13 +58,14 @@ fn main() -> Result<()> {
             output,
             bundle_only,
             formats,
+            skip_failed_formats,
         } => {
             let ctx = commands::common::ProjectContext::load(config, output)?;
             let target = target.unwrap_or_else(Target::host);
             let tui_binary =
                 commands::common::resolve_tui_binary(&ctx.project_dir, &ctx.config, &target)?;
             let runtime = commands::common::resolve_runtime(&target)?;
-            commands::package::run(&ctx, target, &tui_binary, &runtime, bundle_only, formats)?;
+            commands::package::run(&ctx, target, &tui_binary, &runtime, bundle_only, formats, skip_failed_formats)?;
             Ok(())
         }
         Command::Run { config } => {

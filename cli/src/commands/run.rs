@@ -11,7 +11,7 @@ pub fn run(ctx: ProjectContext, tui_binary: PathBuf, runtime: PathBuf) -> Result
     let target = Target::host();
     let manifest = common::BundleManifest::new(&ctx.config, &target);
 
-    let bundle_dir = package::run(&ctx, target, &tui_binary, &runtime, true, None)?;
+    let bundle_dir = package::run(&ctx, target, &tui_binary, &runtime, true, None, false)?;
 
     let runtime_path = bundle_dir.join(&manifest.runtime_name);
     exec_runtime(&runtime_path)

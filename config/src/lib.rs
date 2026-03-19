@@ -315,8 +315,8 @@ pub struct App {
     pub display_name: String,
     pub slug: String,
     pub version: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub icon: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub icons: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Default)]
@@ -875,7 +875,7 @@ mod tests {
                 display_name: "Test".into(),
                 slug: "test".into(),
                 version: "1.0.0".into(),
-                icon: None,
+                icons: vec![],
             },
             linux: Some(Linux {
                 binaries: BTreeMap::from([(Arch::X86_64, "my-app".into())]),
