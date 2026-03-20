@@ -304,6 +304,8 @@ pub struct Config {
     pub gui: Gui,
     #[serde(default, skip_serializing_if = "Environment::is_default")]
     pub environment: Environment,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theme: Option<Theme>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub ghostty: BTreeMap<String, toml::Value>,
 }
@@ -395,6 +397,12 @@ impl Environment {
     pub fn is_default(&self) -> bool {
         self.env_file.is_none() && self.variables.is_empty()
     }
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Theme {
+    pub path: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -620,6 +628,18 @@ impl Config {
                         ));
                     }
                 }
+            }
+        }
+
+        if let Some(theme) = &self.theme {
+            if theme.path.trim().is_empty() {
+                errors.push("[theme] path must not be empty".into());
+            }
+            if self.ghostty.contains_key("theme") {
+                errors.push(
+                    "[theme] cannot be used together with [ghostty] theme; inline the theme via [theme] and keep [ghostty] for overrides"
+                        .into(),
+                );
             }
         }
 
@@ -886,6 +906,7 @@ mod tests {
             fonts: Fonts::default(),
             gui: Gui::default(),
             environment: Environment::default(),
+            theme: None,
             ghostty: BTreeMap::new(),
         }
     }
@@ -1103,6 +1124,7 @@ binaries = { aarch64 = "my-app-mac" }
         assert!(output.contains("linux")); // serialized as [linux.binaries] by toml
         assert!(!output.contains("macos"));
         assert!(!output.contains("windows"));
+        assert!(!output.contains("[theme]"));
         assert!(!output.contains("[ghostty]"));
         assert!(!output.contains("[window]"));
     }
@@ -1130,6 +1152,28 @@ binaries = { aarch64 = "my-app-mac" }
         assert!(output.contains("initial_width = 800"));
         assert!(output.contains("initial_height = 600"));
         assert!(!output.contains("resizable")); // None fields skipped
+    }
+
+    #[test]
+    fn theme_roundtrip() {
+        let toml_str = r#"
+[app]
+identifier = "com.example.test"
+display_name = "Test"
+slug = "test"
+version = "1.0.0"
+
+[linux]
+binaries = { x86_64 = "my-app" }
+
+[theme]
+path = "themes/dracula"
+"#;
+        let manifest: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(
+            manifest.theme.as_ref().map(|t| t.path.as_str()),
+            Some("themes/dracula")
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -1394,6 +1438,26 @@ binaries = { x86_64 = "my-app" }
 "#;
         let manifest: Config = toml::from_str(toml_str).unwrap();
         assert!(manifest.environment.is_default());
+    }
+
+    #[test]
+    fn validate_theme_path_must_not_be_empty() {
+        let mut m = minimal_manifest();
+        m.theme = Some(Theme { path: "  ".into() });
+        let err = m.validate().unwrap_err().to_string();
+        assert!(err.contains("[theme] path must not be empty"));
+    }
+
+    #[test]
+    fn validate_theme_and_ghostty_theme_conflict() {
+        let mut m = minimal_manifest();
+        m.theme = Some(Theme {
+            path: "themes/dracula".into(),
+        });
+        m.ghostty
+            .insert("theme".into(), toml::Value::String("dracula".into()));
+        let err = m.validate().unwrap_err().to_string();
+        assert!(err.contains("[theme] cannot be used together with [ghostty] theme"));
     }
 
     // -----------------------------------------------------------------------

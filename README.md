@@ -87,6 +87,9 @@ initial_height = 600
 [fonts]
 families = [{ nerdfont = "JetBrainsMono" }]
 
+[theme]
+path = "themes/dracula"
+
 [ghostty]
 font-size = 14
 ```
@@ -169,6 +172,18 @@ env_file = ".env"
 variables = { MY_VAR = "value" }
 ```
 
+### `[theme]` -- optional
+
+Inline a local Ghostty theme file into the generated `ghostty.conf`. Relative
+paths are resolved from the directory containing `trolley.toml`. This is the
+portable way to ship a theme with your app, because it does not depend on
+Ghostty's external theme catalog being installed on the target machine.
+
+```toml
+[theme]
+path = "themes/dracula"
+```
+
 ### `[ghostty]` -- optional
 
 Pass-through configuration for the Ghostty terminal engine. Accepts any
@@ -176,11 +191,12 @@ Ghostty config key with a scalar value (string, integer, float, or boolean)
 or an array of scalars. Arrays are expanded into repeated key lines, which is
 how Ghostty handles multi-value options like `keybind`.
 Note that configs meant for Ghostty's GUI will not take effect (obviously).
+If you want to ship a theme file with your app, prefer `[theme]` over setting
+`theme = "..."` here.
 
 ```toml
 [ghostty]
 font-size = 14
-theme = "dracula"
 keybind = [
     "ctrl+==increase_font_size:1",
     "ctrl+-=decrease_font_size:1",

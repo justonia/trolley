@@ -64,6 +64,7 @@ pub fn run(path: Option<String>) -> Result<()> {
         fonts: Fonts::default(),
         gui: Gui::default(),
         environment: Environment::default(),
+        theme: None,
         ghostty: BTreeMap::new(),
     };
 
@@ -90,7 +91,14 @@ pub fn run(path: Option<String>) -> Result<()> {
         # env_file = \".env\"\n\
         # variables = { MY_VAR = \"value\" }\n";
 
-    let final_content = format!("{content}{fonts_block}{env_block}");
+    let theme_block = "\n\
+        # Inline a local Ghostty theme file into the generated ghostty.conf.\n\
+        # Useful when you want a packaged app theme without depending on\n\
+        # Ghostty's external theme catalog.\n\
+        # [theme]\n\
+        # path = \"themes/dracula\"\n";
+
+    let final_content = format!("{content}{fonts_block}{env_block}{theme_block}");
 
     std::fs::write(&manifest_path, &final_content)
         .with_context(|| format!("writing {}", manifest_path.display()))?;

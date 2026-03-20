@@ -544,7 +544,22 @@ pub fn assemble_config(
         buf.write_all(b"\n")?;
     }
 
-    // 3. Developer's ghostty.conf (optional)
+    // 3. Project theme file (optional) — inlined so packaged apps do not
+    // depend on Ghostty's external theme catalog being present.
+    if let Some(theme) = &config.theme {
+        let theme_path = PathBuf::from(&theme.path);
+        let theme_path = if theme_path.is_absolute() {
+            theme_path
+        } else {
+            project_dir.join(theme_path)
+        };
+        let content = std::fs::read(&theme_path)
+            .with_context(|| format!("reading theme file {}", theme_path.display()))?;
+        buf.write_all(&content)?;
+        buf.write_all(b"\n")?;
+    }
+
+    // 4. Developer's ghostty.conf (optional)
     let dev_config = project_dir.join(GHOSTTY_CONFIG_FILENAME);
     if dev_config.exists() {
         let content = std::fs::read(&dev_config)
@@ -553,14 +568,14 @@ pub fn assemble_config(
         buf.write_all(b"\n")?;
     }
 
-    // 4. [ghostty] section from manifest (overrides ghostty.conf)
+    // 5. [ghostty] section from manifest (overrides theme and ghostty.conf)
     let ghostty_config = trolley_config::ghostty_config_string(config);
     if !ghostty_config.is_empty() {
         buf.write_all(ghostty_config.as_bytes())?;
         buf.write_all(b"\n")?;
     }
 
-    // 5. Command to run the TUI binary, unless explicitly overridden.
+    // 6. Command to run the TUI binary, unless explicitly overridden.
     // Some apps need custom Ghostty startup semantics (for example `shell:`
     // commands paired with explicit working-directory behavior), so a manifest
     // `command` must take precedence over this default.
@@ -577,7 +592,7 @@ pub fn assemble_config(
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
-    use trolley_config::{App, Arch, Environment, Fonts, Gui, Linux};
+    use trolley_config::{App, Arch, Environment, Fonts, Gui, Linux, Theme};
 
     fn test_manifest() -> Config {
         Config {
@@ -597,6 +612,7 @@ mod tests {
             fonts: Fonts::default(),
             gui: Gui::default(),
             environment: Environment::default(),
+            theme: None,
             ghostty: BTreeMap::new(),
         }
     }
@@ -704,5 +720,33 @@ mod tests {
 
         assert!(rendered.contains("command = shell:./app_core\n"));
         assert!(!rendered.contains("command = direct:./app_core\n"));
+    }
+
+    #[test]
+    fn assemble_config_inlines_theme_file_before_manifest_overrides() {
+        let dir = tempfile::tempdir().unwrap();
+        let theme_dir = dir.path().join("themes");
+        std::fs::create_dir_all(&theme_dir).unwrap();
+        std::fs::write(
+            theme_dir.join("custom"),
+            "background = 000000\nforeground = ffffff\n",
+        )
+        .unwrap();
+
+        let mut manifest = test_manifest();
+        manifest.theme = Some(Theme {
+            path: "themes/custom".into(),
+        });
+        manifest
+            .ghostty
+            .insert("background".into(), toml::Value::String("111111".into()));
+
+        let bytes = assemble_config(dir.path(), &manifest, "app_core", &[]).unwrap();
+        let rendered = String::from_utf8(bytes).unwrap();
+
+        let theme_idx = rendered.find("background = 000000\n").unwrap();
+        let override_idx = rendered.find("background = 111111\n").unwrap();
+        assert!(theme_idx < override_idx);
+        assert!(rendered.contains("foreground = ffffff\n"));
     }
 }
