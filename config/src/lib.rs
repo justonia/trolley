@@ -304,6 +304,8 @@ pub struct Config {
     pub gui: Gui,
     #[serde(default, skip_serializing_if = "Environment::is_default")]
     pub environment: Environment,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shader: Option<Shader>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub ghostty: BTreeMap<String, toml::Value>,
 }
@@ -395,6 +397,12 @@ impl Environment {
     pub fn is_default(&self) -> bool {
         self.env_file.is_none() && self.variables.is_empty()
     }
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Shader {
+    pub path: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -620,6 +628,35 @@ impl Config {
                         ));
                     }
                 }
+            }
+        }
+
+        if let Some(shader) = &self.shader {
+            if shader.path.trim().is_empty() {
+                errors.push("[shader] path must not be empty".into());
+            } else {
+                let path = Path::new(&shader.path);
+                if path.is_absolute() {
+                    errors.push("[shader] path must be relative".into());
+                }
+                if path.components().any(|component| {
+                    matches!(
+                        component,
+                        std::path::Component::ParentDir
+                            | std::path::Component::CurDir
+                            | std::path::Component::RootDir
+                            | std::path::Component::Prefix(_)
+                    )
+                }) {
+                    errors.push(
+                        "[shader] path must be a clean relative path without '.' or '..' segments"
+                            .into(),
+                    );
+                }
+            }
+
+            if self.ghostty.contains_key("custom-shader") {
+                errors.push("[shader] cannot be used together with [ghostty] custom-shader".into());
             }
         }
 
@@ -886,6 +923,7 @@ mod tests {
             fonts: Fonts::default(),
             gui: Gui::default(),
             environment: Environment::default(),
+            shader: None,
             ghostty: BTreeMap::new(),
         }
     }
@@ -1103,6 +1141,7 @@ binaries = { aarch64 = "my-app-mac" }
         assert!(output.contains("linux")); // serialized as [linux.binaries] by toml
         assert!(!output.contains("macos"));
         assert!(!output.contains("windows"));
+        assert!(!output.contains("[shader]"));
         assert!(!output.contains("[ghostty]"));
         assert!(!output.contains("[window]"));
     }
@@ -1130,6 +1169,28 @@ binaries = { aarch64 = "my-app-mac" }
         assert!(output.contains("initial_width = 800"));
         assert!(output.contains("initial_height = 600"));
         assert!(!output.contains("resizable")); // None fields skipped
+    }
+
+    #[test]
+    fn shader_roundtrip() {
+        let toml_str = r#"
+[app]
+identifier = "com.example.test"
+display_name = "Test"
+slug = "test"
+version = "1.0.0"
+
+[linux]
+binaries = { x86_64 = "my-app" }
+
+[shader]
+path = "shaders/crt.glsl"
+"#;
+        let manifest: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(
+            manifest.shader.as_ref().map(|shader| shader.path.as_str()),
+            Some("shaders/crt.glsl")
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -1394,6 +1455,48 @@ binaries = { x86_64 = "my-app" }
 "#;
         let manifest: Config = toml::from_str(toml_str).unwrap();
         assert!(manifest.environment.is_default());
+    }
+
+    #[test]
+    fn validate_shader_path_must_not_be_empty() {
+        let mut m = minimal_manifest();
+        m.shader = Some(Shader { path: " ".into() });
+        let err = m.validate().unwrap_err().to_string();
+        assert!(err.contains("[shader] path must not be empty"));
+    }
+
+    #[test]
+    fn validate_shader_path_must_be_relative() {
+        let mut m = minimal_manifest();
+        m.shader = Some(Shader {
+            path: "/tmp/crt.glsl".into(),
+        });
+        let err = m.validate().unwrap_err().to_string();
+        assert!(err.contains("[shader] path must be relative"));
+    }
+
+    #[test]
+    fn validate_shader_path_must_not_escape_bundle() {
+        let mut m = minimal_manifest();
+        m.shader = Some(Shader {
+            path: "../crt.glsl".into(),
+        });
+        let err = m.validate().unwrap_err().to_string();
+        assert!(err.contains("clean relative path"));
+    }
+
+    #[test]
+    fn validate_shader_and_ghostty_custom_shader_conflict() {
+        let mut m = minimal_manifest();
+        m.shader = Some(Shader {
+            path: "shaders/crt.glsl".into(),
+        });
+        m.ghostty.insert(
+            "custom-shader".into(),
+            toml::Value::String("foo.glsl".into()),
+        );
+        let err = m.validate().unwrap_err().to_string();
+        assert!(err.contains("[shader] cannot be used together with [ghostty] custom-shader"));
     }
 
     // -----------------------------------------------------------------------

@@ -64,6 +64,7 @@ pub fn run(path: Option<String>) -> Result<()> {
         fonts: Fonts::default(),
         gui: Gui::default(),
         environment: Environment::default(),
+        shader: None,
         ghostty: BTreeMap::new(),
     };
 
@@ -90,7 +91,13 @@ pub fn run(path: Option<String>) -> Result<()> {
         # env_file = \".env\"\n\
         # variables = { MY_VAR = \"value\" }\n";
 
-    let final_content = format!("{content}{fonts_block}{env_block}");
+    let shader_block = "\n\
+        # Bundle a single custom shader and wire it into Ghostty as\n\
+        # `custom-shader = <path>` using the same relative path.\n\
+        # [shader]\n\
+        # path = \"shaders/crt.glsl\"\n";
+
+    let final_content = format!("{content}{fonts_block}{env_block}{shader_block}");
 
     std::fs::write(&manifest_path, &final_content)
         .with_context(|| format!("writing {}", manifest_path.display()))?;

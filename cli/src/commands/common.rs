@@ -338,6 +338,45 @@ pub fn copy_fonts_to_bundle(font_files: &[PathBuf], output_dir: &Path) -> Result
     Ok(())
 }
 
+pub struct BundledShader {
+    pub relative_path: PathBuf,
+    pub absolute_path: PathBuf,
+}
+
+pub fn resolve_shader(project_dir: &Path, config: &Config) -> Result<Option<BundledShader>> {
+    let Some(shader) = &config.shader else {
+        return Ok(None);
+    };
+
+    let relative_path = PathBuf::from(&shader.path);
+    let absolute_path = project_dir.join(&relative_path);
+    let absolute_path = absolute_path
+        .canonicalize()
+        .with_context(|| format!("shader file not found at {}", absolute_path.display()))?;
+
+    Ok(Some(BundledShader {
+        relative_path,
+        absolute_path,
+    }))
+}
+
+pub fn copy_shader_to_bundle(shader: &BundledShader, output_dir: &Path) -> Result<()> {
+    let dest = output_dir.join(&shader.relative_path);
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("creating shader directory {}", parent.display()))?;
+    }
+    std::fs::copy(&shader.absolute_path, &dest).with_context(|| {
+        format!(
+            "copying shader {} to {}",
+            shader.absolute_path.display(),
+            dest.display()
+        )
+    })?;
+
+    Ok(())
+}
+
 const FONTCONFIG_TEMPLATE: &str = r#"<?xml version="1.0"?>
 <!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">
 <fontconfig>
@@ -553,14 +592,20 @@ pub fn assemble_config(
         buf.write_all(b"\n")?;
     }
 
-    // 4. [ghostty] section from manifest (overrides ghostty.conf)
+    // 4. Bundled custom shader path (optional)
+    if let Some(shader) = &config.shader {
+        write!(buf, "custom-shader = {}\n", shader.path)?;
+        buf.write_all(b"\n")?;
+    }
+
+    // 5. [ghostty] section from manifest (overrides ghostty.conf)
     let ghostty_config = trolley_config::ghostty_config_string(config);
     if !ghostty_config.is_empty() {
         buf.write_all(ghostty_config.as_bytes())?;
         buf.write_all(b"\n")?;
     }
 
-    // 5. Command to run the TUI binary, unless explicitly overridden.
+    // 6. Command to run the TUI binary, unless explicitly overridden.
     // Some apps need custom Ghostty startup semantics (for example `shell:`
     // commands paired with explicit working-directory behavior), so a manifest
     // `command` must take precedence over this default.
@@ -577,7 +622,7 @@ pub fn assemble_config(
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
-    use trolley_config::{App, Arch, Environment, Fonts, Gui, Linux};
+    use trolley_config::{App, Arch, Environment, Fonts, Gui, Linux, Shader};
 
     fn test_manifest() -> Config {
         Config {
@@ -597,6 +642,7 @@ mod tests {
             fonts: Fonts::default(),
             gui: Gui::default(),
             environment: Environment::default(),
+            shader: None,
             ghostty: BTreeMap::new(),
         }
     }
@@ -704,5 +750,55 @@ mod tests {
 
         assert!(rendered.contains("command = shell:./app_core\n"));
         assert!(!rendered.contains("command = direct:./app_core\n"));
+    }
+
+    #[test]
+    fn assemble_config_includes_custom_shader_when_configured() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut manifest = test_manifest();
+        manifest.shader = Some(Shader {
+            path: "shaders/crt.glsl".into(),
+        });
+
+        let bytes = assemble_config(dir.path(), &manifest, "app_core", &[]).unwrap();
+        let rendered = String::from_utf8(bytes).unwrap();
+
+        assert!(rendered.contains("custom-shader = shaders/crt.glsl\n"));
+    }
+
+    #[test]
+    fn resolve_shader_resolves_relative_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let shader_dir = dir.path().join("shaders");
+        std::fs::create_dir_all(&shader_dir).unwrap();
+        std::fs::write(shader_dir.join("crt.glsl"), "void mainImage() {}").unwrap();
+
+        let mut manifest = test_manifest();
+        manifest.shader = Some(Shader {
+            path: "shaders/crt.glsl".into(),
+        });
+
+        let shader = resolve_shader(dir.path(), &manifest).unwrap().unwrap();
+        assert_eq!(shader.relative_path, PathBuf::from("shaders/crt.glsl"));
+        assert!(shader.absolute_path.is_absolute());
+    }
+
+    #[test]
+    fn copy_shader_to_bundle_preserves_relative_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let bundle_dir = tempfile::tempdir().unwrap();
+        let shader_dir = dir.path().join("shaders");
+        std::fs::create_dir_all(&shader_dir).unwrap();
+        std::fs::write(shader_dir.join("crt.glsl"), "void mainImage() {}").unwrap();
+
+        let mut manifest = test_manifest();
+        manifest.shader = Some(Shader {
+            path: "shaders/crt.glsl".into(),
+        });
+
+        let shader = resolve_shader(dir.path(), &manifest).unwrap().unwrap();
+        copy_shader_to_bundle(&shader, bundle_dir.path()).unwrap();
+
+        assert!(bundle_dir.path().join("shaders/crt.glsl").exists());
     }
 }

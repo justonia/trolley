@@ -87,6 +87,9 @@ initial_height = 600
 [fonts]
 families = [{ nerdfont = "JetBrainsMono" }]
 
+[shader]
+path = "shaders/crt.glsl"
+
 [ghostty]
 font-size = 14
 ```
@@ -169,6 +172,18 @@ env_file = ".env"
 variables = { MY_VAR = "value" }
 ```
 
+### `[shader]` -- optional
+
+Bundle a single custom shader file and wire it into Ghostty as a
+`custom-shader` entry. The path must be a clean relative path from the
+directory containing `trolley.toml`; Trolley copies the shader into the bundle
+at the same relative path so `trolley run` and packaged apps behave the same.
+
+```toml
+[shader]
+path = "shaders/crt.glsl"
+```
+
 ### `[ghostty]` -- optional
 
 Pass-through configuration for the Ghostty terminal engine. Accepts any
@@ -176,6 +191,8 @@ Ghostty config key with a scalar value (string, integer, float, or boolean)
 or an array of scalars. Arrays are expanded into repeated key lines, which is
 how Ghostty handles multi-value options like `keybind`.
 Note that configs meant for Ghostty's GUI will not take effect (obviously).
+If you want to bundle a shader with your app, prefer `[shader]` over setting
+`custom-shader` here.
 
 ```toml
 [ghostty]

@@ -82,6 +82,12 @@ pub fn run(
 
     // Read font family names for config assembly
     let font_family_names = common::read_font_family_names(&font_files)?;
+    let shader = common::resolve_shader(&ctx.project_dir, &ctx.config)?;
+
+    if let Some(shader) = &shader {
+        common::copy_shader_to_bundle(shader, &bundle_dir)?;
+        manifest.resources.push(shader.relative_path.clone());
+    }
 
     // Assemble ghostty.conf — command references the renamed TUI binary
     let config_bytes = common::assemble_config(
@@ -152,6 +158,9 @@ pub fn run(
     }
     if !font_files.is_empty() {
         println!("  fonts/  ({} font files)", font_files.len());
+    }
+    if let Some(shader) = &shader {
+        println!("  {}  (custom shader)", shader.relative_path.display());
     }
 
     // Build packages unless bundle-only
