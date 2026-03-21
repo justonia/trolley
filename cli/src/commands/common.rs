@@ -338,6 +338,138 @@ pub fn copy_fonts_to_bundle(font_files: &[PathBuf], output_dir: &Path) -> Result
     Ok(())
 }
 
+pub struct BundledShader {
+    pub relative_path: PathBuf,
+    pub absolute_path: PathBuf,
+}
+
+pub struct BundledDataPath {
+    pub relative_path: PathBuf,
+    pub absolute_path: PathBuf,
+}
+
+pub fn resolve_shaders(project_dir: &Path, config: &Config) -> Result<Vec<BundledShader>> {
+    config
+        .embeds
+        .shaders
+        .iter()
+        .map(|shader| {
+            let relative_path = PathBuf::from(shader);
+            let absolute_path = project_dir.join(&relative_path);
+            let absolute_path = absolute_path
+                .canonicalize()
+                .with_context(|| format!("shader file not found at {}", absolute_path.display()))?;
+
+            Ok(BundledShader {
+                relative_path,
+                absolute_path,
+            })
+        })
+        .collect()
+}
+
+pub fn resolve_data_paths(project_dir: &Path, config: &Config) -> Result<Vec<BundledDataPath>> {
+    config
+        .embeds
+        .data
+        .iter()
+        .map(|data_path| {
+            let relative_path = PathBuf::from(data_path);
+            let absolute_path = project_dir.join(&relative_path);
+            let absolute_path = absolute_path
+                .canonicalize()
+                .with_context(|| format!("data path not found at {}", absolute_path.display()))?;
+
+            Ok(BundledDataPath {
+                relative_path,
+                absolute_path,
+            })
+        })
+        .collect()
+}
+
+pub fn copy_shader_to_bundle(shader: &BundledShader, output_dir: &Path) -> Result<()> {
+    let dest = output_dir.join(&shader.relative_path);
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("creating shader directory {}", parent.display()))?;
+    }
+    std::fs::copy(&shader.absolute_path, &dest).with_context(|| {
+        format!(
+            "copying shader {} to {}",
+            shader.absolute_path.display(),
+            dest.display()
+        )
+    })?;
+
+    Ok(())
+}
+
+pub fn copy_data_path_to_bundle(data_path: &BundledDataPath, output_dir: &Path) -> Result<Vec<PathBuf>> {
+    let dest = output_dir.join(&data_path.relative_path);
+    if data_path.absolute_path.is_dir() {
+        let mut copied_files = Vec::new();
+        copy_directory_contents(
+            &data_path.absolute_path,
+            &dest,
+            &data_path.relative_path,
+            &mut copied_files,
+        )?;
+        Ok(copied_files)
+    } else {
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("creating data directory {}", parent.display()))?;
+        }
+        std::fs::copy(&data_path.absolute_path, &dest).with_context(|| {
+            format!(
+                "copying data file {} to {}",
+                data_path.absolute_path.display(),
+                dest.display()
+            )
+        })?;
+        Ok(vec![data_path.relative_path.clone()])
+    }
+}
+
+fn copy_directory_contents(
+    src_dir: &Path,
+    dest_dir: &Path,
+    relative_root: &Path,
+    copied_files: &mut Vec<PathBuf>,
+) -> Result<()> {
+    std::fs::create_dir_all(dest_dir)
+        .with_context(|| format!("creating data directory {}", dest_dir.display()))?;
+
+    for entry in std::fs::read_dir(src_dir)
+        .with_context(|| format!("reading data directory {}", src_dir.display()))?
+    {
+        let entry = entry?;
+        let src_path = entry.path();
+        let dest_path = dest_dir.join(entry.file_name());
+        let relative_path = relative_root.join(entry.file_name());
+
+        if src_path.is_dir() {
+            copy_directory_contents(&src_path, &dest_path, &relative_path, copied_files)?;
+        } else {
+            if let Some(parent) = dest_path.parent() {
+                std::fs::create_dir_all(parent)
+                    .with_context(|| format!("creating data directory {}", parent.display()))?;
+            }
+            std::fs::copy(&src_path, &dest_path).with_context(|| {
+                format!(
+                    "copying data file {} to {}",
+                    src_path.display(),
+                    dest_path.display()
+                )
+            })?;
+            copied_files.push(relative_path);
+        }
+    }
+
+    Ok(())
+}
+
 const FONTCONFIG_TEMPLATE: &str = r#"<?xml version="1.0"?>
 <!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">
 <fontconfig>
@@ -544,7 +676,22 @@ pub fn assemble_config(
         buf.write_all(b"\n")?;
     }
 
-    // 3. Developer's ghostty.conf (optional)
+    // 3. Project theme file (optional) — inlined so packaged apps do not
+    // depend on Ghostty's external theme catalog being present.
+    if let Some(theme) = &config.embeds.theme {
+        let theme_path = PathBuf::from(theme);
+        let theme_path = if theme_path.is_absolute() {
+            theme_path
+        } else {
+            project_dir.join(theme_path)
+        };
+        let content = std::fs::read(&theme_path)
+            .with_context(|| format!("reading theme file {}", theme_path.display()))?;
+        buf.write_all(&content)?;
+        buf.write_all(b"\n")?;
+    }
+
+    // 4. Developer's ghostty.conf (optional)
     let dev_config = project_dir.join(GHOSTTY_CONFIG_FILENAME);
     if dev_config.exists() {
         let content = std::fs::read(&dev_config)
@@ -553,14 +700,22 @@ pub fn assemble_config(
         buf.write_all(b"\n")?;
     }
 
-    // 4. [ghostty] section from manifest (overrides ghostty.conf)
+    // 5. Bundled custom shader paths (optional)
+    for shader in &config.embeds.shaders {
+        write!(buf, "custom-shader = {shader}\n")?;
+    }
+    if !config.embeds.shaders.is_empty() {
+        buf.write_all(b"\n")?;
+    }
+
+    // 6. [ghostty] section from manifest (overrides theme, shaders, and ghostty.conf)
     let ghostty_config = trolley_config::ghostty_config_string(config);
     if !ghostty_config.is_empty() {
         buf.write_all(ghostty_config.as_bytes())?;
         buf.write_all(b"\n")?;
     }
 
-    // 5. Command to run the TUI binary, unless explicitly overridden.
+    // 7. Command to run the TUI binary, unless explicitly overridden.
     // Some apps need custom Ghostty startup semantics (for example `shell:`
     // commands paired with explicit working-directory behavior), so a manifest
     // `command` must take precedence over this default.
@@ -577,7 +732,7 @@ pub fn assemble_config(
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
-    use trolley_config::{App, Arch, Environment, Fonts, Gui, Linux};
+    use trolley_config::{App, Arch, Embeds, Environment, Fonts, Gui, Linux};
 
     fn test_manifest() -> Config {
         Config {
@@ -597,6 +752,7 @@ mod tests {
             fonts: Fonts::default(),
             gui: Gui::default(),
             environment: Environment::default(),
+            embeds: Embeds::default(),
             ghostty: BTreeMap::new(),
         }
     }
@@ -704,5 +860,127 @@ mod tests {
 
         assert!(rendered.contains("command = shell:./app_core\n"));
         assert!(!rendered.contains("command = direct:./app_core\n"));
+    }
+
+    #[test]
+    fn assemble_config_inlines_theme_file_before_manifest_overrides() {
+        let dir = tempfile::tempdir().unwrap();
+        let theme_dir = dir.path().join("themes");
+        std::fs::create_dir_all(&theme_dir).unwrap();
+        std::fs::write(
+            theme_dir.join("custom"),
+            "background = 000000\nforeground = ffffff\n",
+        )
+        .unwrap();
+
+        let mut manifest = test_manifest();
+        manifest.embeds.theme = Some("themes/custom".into());
+        manifest
+            .ghostty
+            .insert("background".into(), toml::Value::String("111111".into()));
+
+        let bytes = assemble_config(dir.path(), &manifest, "app_core", &[]).unwrap();
+        let rendered = String::from_utf8(bytes).unwrap();
+
+        let theme_idx = rendered.find("background = 000000\n").unwrap();
+        let override_idx = rendered.find("background = 111111\n").unwrap();
+        assert!(theme_idx < override_idx);
+        assert!(rendered.contains("foreground = ffffff\n"));
+    }
+
+    #[test]
+    fn assemble_config_includes_custom_shader_when_configured() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut manifest = test_manifest();
+        manifest.embeds.shaders = vec!["shaders/crt.glsl".into(), "shaders/bloom.glsl".into()];
+
+        let bytes = assemble_config(dir.path(), &manifest, "app_core", &[]).unwrap();
+        let rendered = String::from_utf8(bytes).unwrap();
+        assert!(rendered.contains("custom-shader = shaders/crt.glsl\n"));
+        assert!(rendered.contains("custom-shader = shaders/bloom.glsl\n"));
+    }
+
+    #[test]
+    fn resolve_shaders_resolve_relative_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let shader_dir = dir.path().join("shaders");
+        std::fs::create_dir_all(&shader_dir).unwrap();
+        std::fs::write(shader_dir.join("crt.glsl"), "void mainImage() {}").unwrap();
+        std::fs::write(shader_dir.join("bloom.glsl"), "void mainImage() {}").unwrap();
+
+        let mut manifest = test_manifest();
+        manifest.embeds.shaders = vec!["shaders/crt.glsl".into(), "shaders/bloom.glsl".into()];
+
+        let shaders = resolve_shaders(dir.path(), &manifest).unwrap();
+        assert_eq!(shaders.len(), 2);
+        assert_eq!(shaders[0].relative_path, PathBuf::from("shaders/crt.glsl"));
+        assert_eq!(shaders[1].relative_path, PathBuf::from("shaders/bloom.glsl"));
+        assert!(shaders.iter().all(|shader| shader.absolute_path.is_absolute()));
+    }
+
+    #[test]
+    fn copy_shader_to_bundle_preserves_relative_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let bundle_dir = tempfile::tempdir().unwrap();
+        let shader_dir = dir.path().join("shaders");
+        std::fs::create_dir_all(&shader_dir).unwrap();
+        std::fs::write(shader_dir.join("crt.glsl"), "void mainImage() {}").unwrap();
+        std::fs::write(shader_dir.join("bloom.glsl"), "void mainImage() {}").unwrap();
+
+        let mut manifest = test_manifest();
+        manifest.embeds.shaders = vec!["shaders/crt.glsl".into(), "shaders/bloom.glsl".into()];
+
+        let shaders = resolve_shaders(dir.path(), &manifest).unwrap();
+        for shader in &shaders {
+            copy_shader_to_bundle(shader, bundle_dir.path()).unwrap();
+        }
+
+        assert!(bundle_dir.path().join("shaders/crt.glsl").exists());
+        assert!(bundle_dir.path().join("shaders/bloom.glsl").exists());
+    }
+
+    #[test]
+    fn resolve_data_paths_resolves_file_and_directory_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let assets_dir = dir.path().join("assets");
+        std::fs::create_dir_all(assets_dir.join("nested")).unwrap();
+        std::fs::write(assets_dir.join("nested/info.txt"), "hello").unwrap();
+        std::fs::create_dir_all(dir.path().join("config")).unwrap();
+        std::fs::write(dir.path().join("config/defaults.json"), "{}").unwrap();
+
+        let mut manifest = test_manifest();
+        manifest.embeds.data = vec!["assets".into(), "config/defaults.json".into()];
+
+        let data_paths = resolve_data_paths(dir.path(), &manifest).unwrap();
+        assert_eq!(data_paths.len(), 2);
+        assert_eq!(data_paths[0].relative_path, PathBuf::from("assets"));
+        assert_eq!(data_paths[1].relative_path, PathBuf::from("config/defaults.json"));
+        assert!(data_paths[0].absolute_path.is_dir());
+        assert!(data_paths[1].absolute_path.is_file());
+    }
+
+    #[test]
+    fn copy_data_path_to_bundle_preserves_relative_layout() {
+        let dir = tempfile::tempdir().unwrap();
+        let bundle_dir = tempfile::tempdir().unwrap();
+        let assets_dir = dir.path().join("assets");
+        std::fs::create_dir_all(assets_dir.join("nested")).unwrap();
+        std::fs::write(assets_dir.join("nested/info.txt"), "hello").unwrap();
+        std::fs::create_dir_all(dir.path().join("config")).unwrap();
+        std::fs::write(dir.path().join("config/defaults.json"), "{}").unwrap();
+
+        let mut manifest = test_manifest();
+        manifest.embeds.data = vec!["assets".into(), "config/defaults.json".into()];
+
+        let data_paths = resolve_data_paths(dir.path(), &manifest).unwrap();
+        let mut copied_files = Vec::new();
+        for data_path in &data_paths {
+            copied_files.extend(copy_data_path_to_bundle(data_path, bundle_dir.path()).unwrap());
+        }
+
+        assert!(bundle_dir.path().join("assets/nested/info.txt").exists());
+        assert!(bundle_dir.path().join("config/defaults.json").exists());
+        assert!(copied_files.contains(&PathBuf::from("assets/nested/info.txt")));
+        assert!(copied_files.contains(&PathBuf::from("config/defaults.json")));
     }
 }

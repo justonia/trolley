@@ -304,6 +304,8 @@ pub struct Config {
     pub gui: Gui,
     #[serde(default, skip_serializing_if = "Environment::is_default")]
     pub environment: Environment,
+    #[serde(default, skip_serializing_if = "Embeds::is_default")]
+    pub embeds: Embeds,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub ghostty: BTreeMap<String, toml::Value>,
 }
@@ -394,6 +396,23 @@ pub struct Environment {
 impl Environment {
     pub fn is_default(&self) -> bool {
         self.env_file.is_none() && self.variables.is_empty()
+    }
+}
+
+#[derive(Debug, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Embeds {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theme: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub shaders: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub data: Vec<String>,
+}
+
+impl Embeds {
+    pub fn is_default(&self) -> bool {
+        self.theme.is_none() && self.shaders.is_empty() && self.data.is_empty()
     }
 }
 
@@ -620,6 +639,74 @@ impl Config {
                         ));
                     }
                 }
+            }
+        }
+
+        if let Some(theme_path) = &self.embeds.theme {
+            if theme_path.trim().is_empty() {
+                errors.push("[embeds] theme must not be empty".into());
+            }
+            if self.ghostty.contains_key("theme") {
+                errors.push(
+                    "[embeds] theme cannot be used together with [ghostty] theme; inline the theme via [embeds] and keep [ghostty] for overrides"
+                        .into(),
+                );
+            }
+        }
+
+        for (index, shader_path) in self.embeds.shaders.iter().enumerate() {
+            if shader_path.trim().is_empty() {
+                errors.push(format!("[embeds] shaders[{index}] must not be empty"));
+                continue;
+            }
+
+            let path = Path::new(shader_path);
+            if path.is_absolute() {
+                errors.push(format!("[embeds] shaders[{index}] must be relative"));
+            }
+            if path.components().any(|component| {
+                matches!(
+                    component,
+                    std::path::Component::ParentDir
+                        | std::path::Component::CurDir
+                        | std::path::Component::RootDir
+                        | std::path::Component::Prefix(_)
+                )
+            }) {
+                errors.push(format!(
+                    "[embeds] shaders[{index}] must be a clean relative path without '.' or '..' segments"
+                ));
+            }
+        }
+
+        if !self.embeds.shaders.is_empty() && self.ghostty.contains_key("custom-shader") {
+            errors.push(
+                "[embeds] shaders cannot be used together with [ghostty] custom-shader".into(),
+            );
+        }
+
+        for (index, data_path) in self.embeds.data.iter().enumerate() {
+            if data_path.trim().is_empty() {
+                errors.push(format!("[embeds] data[{index}] must not be empty"));
+                continue;
+            }
+
+            let path = Path::new(data_path);
+            if path.is_absolute() {
+                errors.push(format!("[embeds] data[{index}] must be relative"));
+            }
+            if path.components().any(|component| {
+                matches!(
+                    component,
+                    std::path::Component::ParentDir
+                        | std::path::Component::CurDir
+                        | std::path::Component::RootDir
+                        | std::path::Component::Prefix(_)
+                )
+            }) {
+                errors.push(format!(
+                    "[embeds] data[{index}] must be a clean relative path without '.' or '..' segments"
+                ));
             }
         }
 
@@ -886,6 +973,11 @@ mod tests {
             fonts: Fonts::default(),
             gui: Gui::default(),
             environment: Environment::default(),
+            embeds: Embeds {
+                theme: None,
+                shaders: Vec::new(),
+                data: Vec::new(),
+            },
             ghostty: BTreeMap::new(),
         }
     }
@@ -1103,6 +1195,7 @@ binaries = { aarch64 = "my-app-mac" }
         assert!(output.contains("linux")); // serialized as [linux.binaries] by toml
         assert!(!output.contains("macos"));
         assert!(!output.contains("windows"));
+        assert!(!output.contains("[embeds]"));
         assert!(!output.contains("[ghostty]"));
         assert!(!output.contains("[window]"));
     }
@@ -1130,6 +1223,72 @@ binaries = { aarch64 = "my-app-mac" }
         assert!(output.contains("initial_width = 800"));
         assert!(output.contains("initial_height = 600"));
         assert!(!output.contains("resizable")); // None fields skipped
+    }
+
+    #[test]
+    fn embeds_theme_roundtrip() {
+        let toml_str = r#"
+[app]
+identifier = "com.example.test"
+display_name = "Test"
+slug = "test"
+version = "1.0.0"
+
+[linux]
+binaries = { x86_64 = "my-app" }
+
+[embeds]
+theme = "themes/dracula"
+"#;
+        let manifest: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(
+            manifest.embeds.theme.as_deref(),
+            Some("themes/dracula")
+        );
+    }
+
+    #[test]
+    fn embeds_shaders_roundtrip() {
+        let toml_str = r#"
+[app]
+identifier = "com.example.test"
+display_name = "Test"
+slug = "test"
+version = "1.0.0"
+
+[linux]
+binaries = { x86_64 = "my-app" }
+
+[embeds]
+shaders = ["shaders/crt.glsl", "shaders/scanlines.glsl"]
+"#;
+        let manifest: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(
+            manifest.embeds.shaders,
+            vec!["shaders/crt.glsl", "shaders/scanlines.glsl"]
+        );
+    }
+
+    #[test]
+    fn embeds_data_roundtrip() {
+        let toml_str = r#"
+[app]
+identifier = "com.example.test"
+display_name = "Test"
+slug = "test"
+version = "1.0.0"
+
+[linux]
+binaries = { x86_64 = "my-app" }
+
+[embeds]
+data = ["assets", "config/defaults.json"]
+"#;
+        let manifest: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(
+            manifest.embeds.data,
+            vec!["assets", "config/defaults.json"]
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -1394,6 +1553,84 @@ binaries = { x86_64 = "my-app" }
 "#;
         let manifest: Config = toml::from_str(toml_str).unwrap();
         assert!(manifest.environment.is_default());
+    }
+
+    #[test]
+    fn validate_embeds_theme_must_not_be_empty() {
+        let mut m = minimal_manifest();
+        m.embeds.theme = Some("  ".into());
+        let err = m.validate().unwrap_err().to_string();
+        assert!(err.contains("[embeds] theme must not be empty"));
+    }
+
+    #[test]
+    fn validate_embeds_theme_and_ghostty_theme_conflict() {
+        let mut m = minimal_manifest();
+        m.embeds.theme = Some("themes/dracula".into());
+        m.ghostty
+            .insert("theme".into(), toml::Value::String("dracula".into()));
+        let err = m.validate().unwrap_err().to_string();
+        assert!(err.contains("[embeds] theme cannot be used together with [ghostty] theme"));
+    }
+
+    #[test]
+    fn validate_embeds_shaders_must_not_be_empty() {
+        let mut m = minimal_manifest();
+        m.embeds.shaders = vec![" ".into()];
+        let err = m.validate().unwrap_err().to_string();
+        assert!(err.contains("[embeds] shaders[0] must not be empty"));
+    }
+
+    #[test]
+    fn validate_embeds_shaders_must_be_relative() {
+        let mut m = minimal_manifest();
+        m.embeds.shaders = vec!["/tmp/crt.glsl".into()];
+        let err = m.validate().unwrap_err().to_string();
+        assert!(err.contains("[embeds] shaders[0] must be relative"));
+    }
+
+    #[test]
+    fn validate_embeds_shaders_must_not_escape_bundle() {
+        let mut m = minimal_manifest();
+        m.embeds.shaders = vec!["../crt.glsl".into()];
+        let err = m.validate().unwrap_err().to_string();
+        assert!(err.contains("clean relative path"));
+    }
+
+    #[test]
+    fn validate_embeds_shaders_and_ghostty_custom_shader_conflict() {
+        let mut m = minimal_manifest();
+        m.embeds.shaders = vec!["shaders/crt.glsl".into()];
+        m.ghostty.insert(
+            "custom-shader".into(),
+            toml::Value::String("foo.glsl".into()),
+        );
+        let err = m.validate().unwrap_err().to_string();
+        assert!(err.contains("[embeds] shaders cannot be used together with [ghostty] custom-shader"));
+    }
+
+    #[test]
+    fn validate_embeds_data_must_not_be_empty() {
+        let mut m = minimal_manifest();
+        m.embeds.data = vec![" ".into()];
+        let err = m.validate().unwrap_err().to_string();
+        assert!(err.contains("[embeds] data[0] must not be empty"));
+    }
+
+    #[test]
+    fn validate_embeds_data_must_be_relative() {
+        let mut m = minimal_manifest();
+        m.embeds.data = vec!["/tmp/assets".into()];
+        let err = m.validate().unwrap_err().to_string();
+        assert!(err.contains("[embeds] data[0] must be relative"));
+    }
+
+    #[test]
+    fn validate_embeds_data_must_not_escape_bundle() {
+        let mut m = minimal_manifest();
+        m.embeds.data = vec!["../assets".into()];
+        let err = m.validate().unwrap_err().to_string();
+        assert!(err.contains("[embeds] data[0] must be a clean relative path"));
     }
 
     // -----------------------------------------------------------------------
