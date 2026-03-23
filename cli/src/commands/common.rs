@@ -338,17 +338,12 @@ pub fn copy_fonts_to_bundle(font_files: &[PathBuf], output_dir: &Path) -> Result
     Ok(())
 }
 
-pub struct BundledShader {
+pub struct BundledPath {
     pub relative_path: PathBuf,
     pub absolute_path: PathBuf,
 }
 
-pub struct BundledDataPath {
-    pub relative_path: PathBuf,
-    pub absolute_path: PathBuf,
-}
-
-pub fn resolve_shaders(project_dir: &Path, config: &Config) -> Result<Vec<BundledShader>> {
+pub fn resolve_shaders(project_dir: &Path, config: &Config) -> Result<Vec<BundledPath>> {
     config
         .embeds
         .shaders
@@ -360,7 +355,7 @@ pub fn resolve_shaders(project_dir: &Path, config: &Config) -> Result<Vec<Bundle
                 .canonicalize()
                 .with_context(|| format!("shader file not found at {}", absolute_path.display()))?;
 
-            Ok(BundledShader {
+            Ok(BundledPath {
                 relative_path,
                 absolute_path,
             })
@@ -368,7 +363,7 @@ pub fn resolve_shaders(project_dir: &Path, config: &Config) -> Result<Vec<Bundle
         .collect()
 }
 
-pub fn resolve_data_paths(project_dir: &Path, config: &Config) -> Result<Vec<BundledDataPath>> {
+pub fn resolve_data_paths(project_dir: &Path, config: &Config) -> Result<Vec<BundledPath>> {
     config
         .embeds
         .data
@@ -380,7 +375,7 @@ pub fn resolve_data_paths(project_dir: &Path, config: &Config) -> Result<Vec<Bun
                 .canonicalize()
                 .with_context(|| format!("data path not found at {}", absolute_path.display()))?;
 
-            Ok(BundledDataPath {
+            Ok(BundledPath {
                 relative_path,
                 absolute_path,
             })
@@ -388,7 +383,7 @@ pub fn resolve_data_paths(project_dir: &Path, config: &Config) -> Result<Vec<Bun
         .collect()
 }
 
-pub fn copy_shader_to_bundle(shader: &BundledShader, output_dir: &Path) -> Result<()> {
+pub fn copy_shader_to_bundle(shader: &BundledPath, output_dir: &Path) -> Result<()> {
     let dest = output_dir.join(&shader.relative_path);
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent)
@@ -405,7 +400,7 @@ pub fn copy_shader_to_bundle(shader: &BundledShader, output_dir: &Path) -> Resul
     Ok(())
 }
 
-pub fn copy_data_path_to_bundle(data_path: &BundledDataPath, output_dir: &Path) -> Result<Vec<PathBuf>> {
+pub fn copy_data_path_to_bundle(data_path: &BundledPath, output_dir: &Path) -> Result<Vec<PathBuf>> {
     let dest = output_dir.join(&data_path.relative_path);
     if data_path.absolute_path.is_dir() {
         let mut copied_files = Vec::new();
