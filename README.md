@@ -87,6 +87,11 @@ initial_height = 600
 [fonts]
 families = [{ nerdfont = "JetBrainsMono" }]
 
+[embeds]
+theme = "themes/dracula"
+shaders = ["shaders/crt.glsl", "shaders/bloom.glsl"]
+data = ["assets", "config/defaults.json"]
+
 [ghostty]
 font-size = 14
 ```
@@ -169,6 +174,32 @@ env_file = ".env"
 variables = { MY_VAR = "value" }
 ```
 
+### `[embeds]` -- optional
+
+Embed portable Ghostty resources into the generated bundle. Relative paths are
+resolved from the directory containing `trolley.toml`.
+
+```toml
+[embeds]
+theme = "themes/dracula"
+shaders = ["shaders/crt.glsl", "shaders/bloom.glsl"]
+data = ["assets", "config/defaults.json"]
+```
+
+`theme` inlines a local Ghostty theme file into the generated `ghostty.conf`.
+This is the portable way to ship a theme with your app, because it does not
+depend on Ghostty's external theme catalog being installed on the target
+machine.
+
+`shaders` bundles one or more custom shader files and wires them into Ghostty
+as repeated `custom-shader` entries. Each shader path must be a clean relative
+path; Trolley copies every shader into the bundle at the same relative path so
+`trolley run` and packaged apps behave the same.
+
+`data` copies files or directories into the bundle root at the same
+relative paths. This is useful for application assets or default data files
+that your TUI loads relative to the runtime working directory.
+
 ### `[ghostty]` -- optional
 
 Pass-through configuration for the Ghostty terminal engine. Accepts any
@@ -176,11 +207,14 @@ Ghostty config key with a scalar value (string, integer, float, or boolean)
 or an array of scalars. Arrays are expanded into repeated key lines, which is
 how Ghostty handles multi-value options like `keybind`.
 Note that configs meant for Ghostty's GUI will not take effect (obviously).
+If you want to ship a theme file with your app, prefer `[embeds].theme` over setting
+`theme = "..."` here.
+If you want to bundle shaders with your app, prefer `[embeds].shaders` over setting
+`custom-shader` here.
 
 ```toml
 [ghostty]
 font-size = 14
-theme = "dracula"
 keybind = [
     "ctrl+==increase_font_size:1",
     "ctrl+-=decrease_font_size:1",

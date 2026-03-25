@@ -64,6 +64,7 @@ pub fn run(path: Option<String>) -> Result<()> {
         fonts: Fonts::default(),
         gui: Gui::default(),
         environment: Environment::default(),
+        embeds: trolley_config::Embeds::default(),
         ghostty: BTreeMap::new(),
     };
 
@@ -90,7 +91,17 @@ pub fn run(path: Option<String>) -> Result<()> {
         # env_file = \".env\"\n\
         # variables = { MY_VAR = \"value\" }\n";
 
-    let final_content = format!("{content}{fonts_block}{env_block}");
+    let embeds_block = "\n\
+        # Embed portable Ghostty resources into the generated bundle.\n\
+        # `theme` is inlined into ghostty.conf.\n\
+        # `shaders` emits repeated `custom-shader = <path>` entries.\n\
+        # `data` copies files or directories into the bundle root.\n\
+        # [embeds]\n\
+        # theme = \"themes/dracula\"\n\
+        # shaders = [\"shaders/crt.glsl\"]\n\
+        # data = [\"assets\", \"config/defaults.json\"]\n";
+
+    let final_content = format!("{content}{fonts_block}{env_block}{embeds_block}");
 
     std::fs::write(&manifest_path, &final_content)
         .with_context(|| format!("writing {}", manifest_path.display()))?;
