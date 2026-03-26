@@ -424,6 +424,8 @@ impl Embeds {
 #[serde(deny_unknown_fields)]
 pub struct Linux {
     pub binaries: BTreeMap<Arch, String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub args: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub appimage: Option<AppImageConfig>,
 }
@@ -432,12 +434,16 @@ pub struct Linux {
 #[serde(deny_unknown_fields)]
 pub struct Macos {
     pub binaries: BTreeMap<Arch, String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub args: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Windows {
     pub binaries: BTreeMap<Arch, String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub args: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -483,6 +489,17 @@ impl Config {
         binaries.get(&arch).map(|s| s.as_str())
     }
 
+    pub fn args_for(&self, target: &Target) -> Option<&[String]> {
+        let args = if target.is_linux() {
+            &self.linux.as_ref()?.args
+        } else if target.is_macos() {
+            &self.macos.as_ref()?.args
+        } else {
+            &self.windows.as_ref()?.args
+        };
+        Some(args.as_slice())
+    }
+
     pub fn validate(&self) -> Result<()> {
         let mut errors: Vec<String> = Vec::new();
 
@@ -524,6 +541,7 @@ impl Config {
                     errors.push(format!("[linux] binary path for {arch} must not be empty"));
                 }
             }
+            validate_platform_args("[linux]", &linux.args, &mut errors);
         }
         if let Some(ref macos) = self.macos {
             if macos.binaries.is_empty() {
@@ -534,6 +552,7 @@ impl Config {
                     errors.push(format!("[macos] binary path for {arch} must not be empty"));
                 }
             }
+            validate_platform_args("[macos]", &macos.args, &mut errors);
         }
         if let Some(ref windows) = self.windows {
             if windows.binaries.is_empty() {
@@ -546,6 +565,7 @@ impl Config {
                     ));
                 }
             }
+            validate_platform_args("[windows]", &windows.args, &mut errors);
         }
 
         // Window dimension checks
@@ -733,6 +753,28 @@ impl Config {
             }
         }
 
+        if self.ghostty.contains_key("command") {
+            if let Some(linux) = &self.linux {
+                if !linux.args.is_empty() {
+                    errors
+                        .push("[linux] args cannot be used together with [ghostty] command".into());
+                }
+            }
+            if let Some(macos) = &self.macos {
+                if !macos.args.is_empty() {
+                    errors
+                        .push("[macos] args cannot be used together with [ghostty] command".into());
+                }
+            }
+            if let Some(windows) = &self.windows {
+                if !windows.args.is_empty() {
+                    errors.push(
+                        "[windows] args cannot be used together with [ghostty] command".into(),
+                    );
+                }
+            }
+        }
+
         if errors.is_empty() {
             Ok(())
         } else {
@@ -809,6 +851,27 @@ fn validate_slug(slug: &str) -> std::result::Result<(), String> {
         ));
     }
     Ok(())
+}
+
+fn validate_platform_args(section: &str, args: &[String], errors: &mut Vec<String>) {
+    for (index, arg) in args.iter().enumerate() {
+        if arg.is_empty() {
+            errors.push(format!("{section} args[{index}] must not be empty"));
+            continue;
+        }
+
+        if arg.chars().any(char::is_control) {
+            errors.push(format!(
+                "{section} args[{index}] must not contain control characters"
+            ));
+        }
+
+        if arg.chars().any(char::is_whitespace) {
+            errors.push(format!(
+                "{section} args[{index}] must not contain whitespace; Ghostty's direct command parser splits on spaces"
+            ));
+        }
+    }
 }
 
 /// Serialize the `[ghostty]` section as ghostty config lines ("key = value\n").
@@ -966,6 +1029,7 @@ mod tests {
             },
             linux: Some(Linux {
                 binaries: BTreeMap::from([(Arch::X86_64, "my-app".into())]),
+                args: Vec::new(),
                 appimage: None,
             }),
             macos: None,
@@ -1034,9 +1098,11 @@ binaries = { aarch64 = "my-app-mac" }
         let linux = manifest.linux.as_ref().unwrap();
         assert_eq!(linux.binaries.len(), 1);
         assert_eq!(linux.binaries[&Arch::X86_64], "my-app");
+        assert!(linux.args.is_empty());
         let macos = manifest.macos.as_ref().unwrap();
         assert_eq!(macos.binaries.len(), 1);
         assert_eq!(macos.binaries[&Arch::Aarch64], "my-app-mac");
+        assert!(macos.args.is_empty());
         assert!(manifest.windows.is_none());
     }
 
@@ -1122,6 +1188,7 @@ binaries = { aarch64 = "my-app-mac" }
         let mut m = minimal_manifest();
         m.linux = Some(Linux {
             binaries: BTreeMap::new(),
+            args: Vec::new(),
             appimage: None,
         });
         let err = m.validate().unwrap_err().to_string();
@@ -1133,10 +1200,47 @@ binaries = { aarch64 = "my-app-mac" }
         let mut m = minimal_manifest();
         m.linux = Some(Linux {
             binaries: BTreeMap::from([(Arch::X86_64, "  ".into())]),
+            args: Vec::new(),
             appimage: None,
         });
         let err = m.validate().unwrap_err().to_string();
         assert!(err.contains("[linux] binary path for x86_64 must not be empty"));
+    }
+
+    #[test]
+    fn validate_platform_args_reject_empty() {
+        let mut m = minimal_manifest();
+        m.linux.as_mut().unwrap().args = vec!["".into()];
+        let err = m.validate().unwrap_err().to_string();
+        assert!(err.contains("[linux] args[0] must not be empty"));
+    }
+
+    #[test]
+    fn validate_platform_args_reject_whitespace() {
+        let mut m = minimal_manifest();
+        m.linux.as_mut().unwrap().args = vec!["--name=Jane Doe".into()];
+        let err = m.validate().unwrap_err().to_string();
+        assert!(err.contains("[linux] args[0] must not contain whitespace"));
+    }
+
+    #[test]
+    fn validate_platform_args_reject_control_chars() {
+        let mut m = minimal_manifest();
+        m.linux.as_mut().unwrap().args = vec!["bad\narg".into()];
+        let err = m.validate().unwrap_err().to_string();
+        assert!(err.contains("[linux] args[0] must not contain control characters"));
+    }
+
+    #[test]
+    fn validate_platform_args_conflict_with_ghostty_command() {
+        let mut m = minimal_manifest();
+        m.linux.as_mut().unwrap().args = vec!["--verbose".into()];
+        m.ghostty.insert(
+            "command".into(),
+            toml::Value::String("shell:./my-app".into()),
+        );
+        let err = m.validate().unwrap_err().to_string();
+        assert!(err.contains("[linux] args cannot be used together with [ghostty] command"));
     }
 
     #[test]
@@ -1211,6 +1315,37 @@ binaries = { aarch64 = "my-app-mac" }
         assert_eq!(deserialized.app.version, m.app.version);
         let linux = deserialized.linux.as_ref().unwrap();
         assert_eq!(linux.binaries[&Arch::X86_64], "my-app");
+        assert!(linux.args.is_empty());
+    }
+
+    #[test]
+    fn platform_args_roundtrip() {
+        let toml_str = r#"
+[app]
+identifier = "com.example.test"
+display_name = "Test"
+slug = "test"
+version = "1.0.0"
+
+[linux]
+binaries = { x86_64 = "my-app" }
+args = ["--verbose", "--port=9000"]
+
+[macos]
+binaries = { aarch64 = "my-app-mac" }
+args = ["--profile=dev"]
+
+[windows]
+binaries = { x86_64 = "my-app.exe" }
+args = ["--flag"]
+"#;
+        let manifest: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(
+            manifest.linux.as_ref().unwrap().args,
+            vec!["--verbose", "--port=9000"]
+        );
+        assert_eq!(manifest.macos.as_ref().unwrap().args, vec!["--profile=dev"]);
+        assert_eq!(manifest.windows.as_ref().unwrap().args, vec!["--flag"]);
     }
 
     #[test]
@@ -1241,10 +1376,7 @@ binaries = { x86_64 = "my-app" }
 theme = "themes/dracula"
 "#;
         let manifest: Config = toml::from_str(toml_str).unwrap();
-        assert_eq!(
-            manifest.embeds.theme.as_deref(),
-            Some("themes/dracula")
-        );
+        assert_eq!(manifest.embeds.theme.as_deref(), Some("themes/dracula"));
     }
 
     #[test]
@@ -1285,10 +1417,7 @@ binaries = { x86_64 = "my-app" }
 data = ["assets", "config/defaults.json"]
 "#;
         let manifest: Config = toml::from_str(toml_str).unwrap();
-        assert_eq!(
-            manifest.embeds.data,
-            vec!["assets", "config/defaults.json"]
-        );
+        assert_eq!(manifest.embeds.data, vec!["assets", "config/defaults.json"]);
     }
 
     // -----------------------------------------------------------------------
@@ -1809,6 +1938,15 @@ binaries = { x86_64 = "my-app" }
         assert_eq!(m.binary_for(&Target::X86_64Windows), None);
     }
 
+    #[test]
+    fn args_for_platform() {
+        let mut m = minimal_manifest();
+        m.linux.as_mut().unwrap().args = vec!["--verbose".into(), "--port=9000".into()];
+        let expected = vec!["--verbose".to_string(), "--port=9000".to_string()];
+        assert_eq!(m.args_for(&Target::X86_64Linux), Some(expected.as_slice()));
+        assert_eq!(m.args_for(&Target::X86_64Macos), None);
+    }
+
     // -----------------------------------------------------------------------
     // AppImageConfig
     // -----------------------------------------------------------------------
@@ -1832,6 +1970,7 @@ categories = "Utility"
         let linux = manifest.linux.as_ref().unwrap();
         let appimage = linux.appimage.as_ref().unwrap();
         assert_eq!(appimage.categories.as_deref(), Some("Utility"));
+        assert!(linux.args.is_empty());
     }
 
     // -----------------------------------------------------------------------
