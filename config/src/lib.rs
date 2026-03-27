@@ -438,6 +438,12 @@ pub struct Macos {
 #[serde(deny_unknown_fields)]
 pub struct Windows {
     pub binaries: BTreeMap<Arch, String>,
+    /// Request 1ms timer resolution via timeBeginPeriod.
+    /// Reduces timer jitter from ~15.6ms to ~1ms, improving animation
+    /// smoothness at the cost of slightly higher power consumption.
+    /// Defaults to false.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub precise_timer: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -860,6 +866,8 @@ pub struct TrolleyGuiConfig {
     pub max_width: u32,
     /// Maximum height in pixels. 0 = unset.
     pub max_height: u32,
+    /// Windows: request 1ms timer resolution. 0 = false (default), 1 = true.
+    pub win_precise_timer: u8,
 }
 
 /// Load a trolley manifest and extract the window and environment configs.
@@ -895,6 +903,10 @@ pub unsafe extern "C" fn trolley_load_manifest(
         window_config.min_height = manifest.gui.min_height.unwrap_or(0);
         window_config.max_width = manifest.gui.max_width.unwrap_or(0);
         window_config.max_height = manifest.gui.max_height.unwrap_or(0);
+        window_config.win_precise_timer = manifest
+            .windows
+            .as_ref()
+            .map_or(0, |w| u8::from(w.precise_timer.unwrap_or(false)));
 
         // Report ghostty config length so the caller can allocate.
         let config_string = ghostty_config_string(&manifest);
@@ -1241,10 +1253,7 @@ binaries = { x86_64 = "my-app" }
 theme = "themes/dracula"
 "#;
         let manifest: Config = toml::from_str(toml_str).unwrap();
-        assert_eq!(
-            manifest.embeds.theme.as_deref(),
-            Some("themes/dracula")
-        );
+        assert_eq!(manifest.embeds.theme.as_deref(), Some("themes/dracula"));
     }
 
     #[test]
@@ -1285,10 +1294,7 @@ binaries = { x86_64 = "my-app" }
 data = ["assets", "config/defaults.json"]
 "#;
         let manifest: Config = toml::from_str(toml_str).unwrap();
-        assert_eq!(
-            manifest.embeds.data,
-            vec!["assets", "config/defaults.json"]
-        );
+        assert_eq!(manifest.embeds.data, vec!["assets", "config/defaults.json"]);
     }
 
     // -----------------------------------------------------------------------
@@ -1606,7 +1612,9 @@ binaries = { x86_64 = "my-app" }
             toml::Value::String("foo.glsl".into()),
         );
         let err = m.validate().unwrap_err().to_string();
-        assert!(err.contains("[embeds] shaders cannot be used together with [ghostty] custom-shader"));
+        assert!(
+            err.contains("[embeds] shaders cannot be used together with [ghostty] custom-shader")
+        );
     }
 
     #[test]

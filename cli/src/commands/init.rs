@@ -48,6 +48,7 @@ pub fn run(path: Option<String>) -> Result<()> {
     });
     let windows = Some(Windows {
         binaries: all_arches,
+        precise_timer: None,
     });
 
     let manifest = Config {

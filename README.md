@@ -151,6 +151,16 @@ The manifest file `trolley.toml` has the following sections:
 binaries = { x86_64 = "path/to/binary", aarch64 = "path/to/binary" }
 ```
 
+On Windows, `precise_timer = true` requests 1ms timer resolution instead of
+the default ~15.6ms. This reduces timer jitter and can improve animation
+smoothness, but might slightly increase CPU usage.
+
+```toml
+[windows]
+binaries = { x86_64 = "path/to/app.exe" }
+precise_timer = true
+```
+
 ### `[gui]` -- optional
 
 `initial_width`, `initial_height`, `resizable`, `min_width`, `min_height`,
