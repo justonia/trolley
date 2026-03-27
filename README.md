@@ -315,6 +315,25 @@ Use `--skip-failed-formats` to continue building remaining formats if one fails
 trolley package --skip-failed-formats
 ```
 
+## Windows Render Workaround
+
+Ghostty currently has a Windows renderer wakeup bug that can cause Trolley's
+Windows runtime to update at effectively 2 FPS. Discussion:
+
+`https://github.com/ghostty-org/ghostty/discussions/11877`
+
+If you are building the Windows runtime from source and need this temporary
+workaround, pass:
+
+`just build-runtime --target x86_64-windows --apply-ghostty-windows-render-patch`
+
+or:
+
+`just build --target x86_64-windows --apply-ghostty-windows-render-patch`
+
+This temporarily applies `patches/ghostty/windows-render.patch` to the Ghostty
+submodule for the duration of the build, then reverses it on exit.
+
 ## BUNDLING != SANDBOXING
 
 Trolley simply runs your executable inside a terminal, and in that sense, provides no
