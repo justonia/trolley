@@ -1,0 +1,52 @@
+diff --git a/src/Surface.zig b/src/Surface.zig
+index ebc2a2f43..66a9fdf79 100644
+--- a/src/Surface.zig
++++ b/src/Surface.zig
+@@ -658,7 +658,7 @@ pub fn init(
+             .backend = .{ .exec = io_exec },
+             .mailbox = io_mailbox,
+             .renderer_state = &self.renderer_state,
+-            .renderer_wakeup = render_thread.wakeup,
++            .renderer_wakeup = &self.renderer_thread.wakeup,
+             .renderer_mailbox = render_thread.mailbox,
+             .surface_mailbox = .{ .surface = self, .app = app_mailbox },
+         });
+diff --git a/src/termio/Options.zig b/src/termio/Options.zig
+index a6bf8c4d4..c9da54de2 100644
+--- a/src/termio/Options.zig
++++ b/src/termio/Options.zig
+@@ -32,7 +32,7 @@ renderer_state: *renderer.State,
+ 
+ /// A handle to wake up the renderer. This hints to the renderer that
+ /// a repaint should happen.
+-renderer_wakeup: xev.Async,
++renderer_wakeup: *xev.Async,
+ 
+ /// The mailbox for renderer messages.
+ renderer_mailbox: *renderer.Thread.Mailbox,
+diff --git a/src/termio/Termio.zig b/src/termio/Termio.zig
+index 73e1c46d5..6a6518deb 100644
+--- a/src/termio/Termio.zig
++++ b/src/termio/Termio.zig
+@@ -44,7 +44,7 @@ renderer_state: *renderer.State,
+ 
+ /// A handle to wake up the renderer. This hints to the renderer that
+ /// a repaint should happen.
+-renderer_wakeup: xev.Async,
++renderer_wakeup: *xev.Async,
+ 
+ /// The mailbox for notifying the renderer of things.
+ renderer_mailbox: *renderer.Thread.Mailbox,
+diff --git a/src/termio/stream_handler.zig b/src/termio/stream_handler.zig
+index 5041d916a..0a953e3b1 100644
+--- a/src/termio/stream_handler.zig
++++ b/src/termio/stream_handler.zig
+@@ -38,7 +38,7 @@ pub const StreamHandler = struct {
+ 
+     /// A handle to wake up the renderer. This hints to the renderer that
+     /// a repaint should happen.
+-    renderer_wakeup: xev.Async,
++    renderer_wakeup: *xev.Async,
+ 
+     /// The default cursor state. This is used with CSI q. This is
+     /// set to true when we're currently in the default cursor state.

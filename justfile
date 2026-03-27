@@ -39,7 +39,7 @@ _runtime-target target:
 
 # Build the trolley CLI
 
-# Flags: [--release] [--target <triple>]
+# Flags: [--release] [--target <triple>] [--apply-ghostty-windows-render-patch]
 build-cli *flags:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -56,6 +56,7 @@ build-cli *flags:
         case "$flag" in
             --target)  next_is_target=1 ;;
             --release) release=1 ;;
+            --apply-ghostty-windows-render-patch) ;;
             *)         echo "Unknown flag: $flag" >&2; exit 1 ;;
         esac
     done
@@ -70,7 +71,7 @@ build-cli *flags:
 
 # Build the config staticlib (manifest parsing, linked into the runtime)
 
-# Flags: [--release] [--target <triple>]
+# Flags: [--release] [--target <triple>] [--apply-ghostty-windows-render-patch]
 build-config *flags:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -87,6 +88,7 @@ build-config *flags:
         case "$flag" in
             --target)  next_is_target=1 ;;
             --release) release=1 ;;
+            --apply-ghostty-windows-render-patch) ;;
             *)         echo "Unknown flag: $flag" >&2; exit 1 ;;
         esac
     done
@@ -100,12 +102,13 @@ build-config *flags:
     cargo build -p trolley-config --quiet $cargo_args
 
 # Build the trolley runtime
-# Flags: [--release] [--target <triple>] [--system <path>]
+# Flags: [--release] [--target <triple>] [--system <path>] [--apply-ghostty-windows-render-patch]
 # No target flag = host default
 # Examples:
 #   just build-runtime --target x86_64-linux
 #   just build-runtime --target aarch64-macos --release
 #   just build-runtime --release --system /nix/store/...-zig-packages
+#   just build-runtime --target x86_64-windows --apply-ghostty-windows-render-patch
 build-runtime *flags:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -116,6 +119,7 @@ build-runtime *flags:
     cargo_profile="debug"
     release=""
     system=""
+    apply_ghostty_windows_render_patch=""
     next_is_target=""
     next_is_system=""
     for flag in {{ flags }}; do
@@ -133,6 +137,7 @@ build-runtime *flags:
             --target)  next_is_target=1 ;;
             --system)  next_is_system=1 ;;
             --release) release=1; optimize="-Doptimize=ReleaseSafe"; prefix="zig-out-release"; cargo_profile="release" ;;
+            --apply-ghostty-windows-render-patch) apply_ghostty_windows_render_patch=1 ;;
             *)         echo "Unknown flag: $flag" >&2; exit 1 ;;
         esac
     done
@@ -171,6 +176,37 @@ build-runtime *flags:
         echo "Error: config lib not found in $config_dir" >&2
         echo "Expected libtrolley_config.a or trolley_config.lib" >&2
         exit 1
+    fi
+
+    cleanup_ghostty_patch() {
+        if [ -n "${ghostty_patch_applied:-}" ]; then
+            if git -C "{{ justfile_directory() }}/ghostty" apply -R "{{ justfile_directory() }}/patches/ghostty/windows-render.patch"; then
+                echo "Removed temporary Ghostty Windows render patch"
+            else
+                echo "Warning: failed to reverse temporary Ghostty Windows render patch" >&2
+            fi
+        fi
+    }
+    trap cleanup_ghostty_patch EXIT INT TERM
+
+    is_windows_target=false
+    if [[ "$target" == *"-windows" ]]; then
+        is_windows_target=true
+    elif [ -z "$target" ] && [[ "$(uname -s)" == MINGW* || "$(uname -s)" == MSYS* || "$(uname -o 2>/dev/null)" == "Msys" || -n "${WINDIR:-}" ]]; then
+        is_windows_target=true
+    fi
+
+    if [ -n "$apply_ghostty_windows_render_patch" ]; then
+        if ! $is_windows_target; then
+            echo "Ignoring --apply-ghostty-windows-render-patch for non-Windows build" >&2
+        elif [ -n "$(git -C "{{ justfile_directory() }}/ghostty" status --porcelain)" ]; then
+            echo "Ghostty submodule is dirty; skipping optional Windows render patch" >&2
+        else
+            git -C "{{ justfile_directory() }}/ghostty" apply --check "{{ justfile_directory() }}/patches/ghostty/windows-render.patch"
+            git -C "{{ justfile_directory() }}/ghostty" apply "{{ justfile_directory() }}/patches/ghostty/windows-render.patch"
+            ghostty_patch_applied=1
+            echo "Applied temporary Ghostty Windows render patch"
+        fi
     fi
 
     # Step 1: zig build (libghostty + exe on Linux/Windows, libghostty only on macOS)
@@ -218,6 +254,7 @@ build *flags: (build-cli flags) (build-runtime flags)
 
 # Build and package the CLI for release
 # Requires: --target <triple>
+# Optional: --apply-ghostty-windows-render-patch
 # Ignores: --system (accepted for compatibility with release command)
 release-cli *flags:
     #!/usr/bin/env bash
@@ -238,6 +275,7 @@ release-cli *flags:
         case "$flag" in
             --target)  next_is_target=1 ;;
             --system)  skip_next=1 ;;
+            --apply-ghostty-windows-render-patch) ;;
             *)         echo "Unknown flag: $flag" >&2; exit 1 ;;
         esac
     done
@@ -257,11 +295,13 @@ release-cli *flags:
 # Build and package the runtime for release
 # Requires: --target <triple>
 # Optional: --system <path> (pre-built zig deps from nix build .#deps)
+# Optional: --apply-ghostty-windows-render-patch
 release-runtime *flags:
     #!/usr/bin/env bash
     set -euo pipefail
     target=""
     system=""
+    apply_ghostty_windows_render_patch=""
     next_is_target=""
     next_is_system=""
     for flag in {{ flags }}; do
@@ -278,6 +318,7 @@ release-runtime *flags:
         case "$flag" in
             --target)  next_is_target=1 ;;
             --system)  next_is_system=1 ;;
+            --apply-ghostty-windows-render-patch) apply_ghostty_windows_render_patch=1 ;;
             *)         echo "Unknown flag: $flag" >&2; exit 1 ;;
         esac
     done
@@ -287,6 +328,9 @@ release-runtime *flags:
 
     build_flags="--release --target $target"
     if [ -n "$system" ]; then build_flags="$build_flags --system $system"; fi
+    if [ -n "$apply_ghostty_windows_render_patch" ]; then
+        build_flags="$build_flags --apply-ghostty-windows-render-patch"
+    fi
     just build-runtime $build_flags
 
     exe="trolley"; if [[ "$target" == *-windows ]]; then exe="trolley.exe"; fi
