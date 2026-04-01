@@ -206,7 +206,7 @@ var g_window_config: trolley.TrolleyGuiConfig = .{
     .min_height = 0,
     .max_width = 0,
     .max_height = 0,
-    .win_precise_timer = 0,
+    .win_precise_timer = 1,
 };
 
 // ---------------------------------------------------------------------------
