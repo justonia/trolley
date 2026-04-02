@@ -42,12 +42,15 @@ pub fn run(path: Option<String>) -> Result<()> {
     let linux = Some(Linux {
         binaries: all_arches.clone(),
         appimage: None,
+        screenshot_path: None,
     });
     let macos = Some(Macos {
         binaries: all_arches.clone(),
+        screenshot_path: None,
     });
     let windows = Some(Windows {
         binaries: all_arches,
+        screenshot_path: None,
     });
 
     let manifest = Config {
