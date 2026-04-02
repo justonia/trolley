@@ -956,10 +956,13 @@ pub unsafe extern "C" fn trolley_load_manifest(
             _ => std::ptr::null(),
         };
 
-        // pid_file from [environment].
-        window_config.pid_file = match &manifest.environment.pid_file {
+        // pid_file: env var TROLLEY_PID_FILE overrides config value.
+        let env_pid_file = std::env::var("TROLLEY_PID_FILE").ok();
+        let pid_file = env_pid_file.as_deref()
+            .or(manifest.environment.pid_file.as_deref());
+        window_config.pid_file = match pid_file {
             Some(p) if !p.is_empty() => {
-                let c_string = std::ffi::CString::new(p.as_str())
+                let c_string = std::ffi::CString::new(p)
                     .context("pid_file contains interior null byte")?;
                 c_string.into_raw() as *const c_char
             }

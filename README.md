@@ -189,7 +189,8 @@ pid_file = "/tmp/my-app.pid"
 under the given environment variable name. `pid_file` writes the PID to
 the given path on startup and deletes it on exit. Both are useful for
 signaling the runtime from the TUI or external tools (e.g. triggering a
-screenshot via `kill -USR1`).
+screenshot via `kill -USR1`). The environment variable `TROLLEY_PID_FILE`
+overrides `pid_file`.
 
 ### `[embeds]` -- optional
 
