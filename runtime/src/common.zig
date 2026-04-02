@@ -56,7 +56,8 @@ pub fn getenvZ(name: [*:0]const u8) ?[*:0]const u8 {
     if (comptime builtin.os.tag == .windows) {
         return getenv(name);
     } else {
-        return std.posix.getenv(name);
+        const val = std.posix.getenv(std.mem.span(name)) orelse return null;
+        return val.ptr;
     }
 }
 
