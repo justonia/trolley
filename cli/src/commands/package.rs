@@ -99,6 +99,7 @@ pub fn run(
     let config_bytes = common::assemble_config(
         &ctx.project_dir,
         &ctx.config,
+        &target,
         &manifest.core_name,
         &font_family_names,
     )?;

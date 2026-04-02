@@ -41,13 +41,16 @@ pub fn run(path: Option<String>) -> Result<()> {
 
     let linux = Some(Linux {
         binaries: all_arches.clone(),
+        args: Vec::new(),
         appimage: None,
     });
     let macos = Some(Macos {
         binaries: all_arches.clone(),
+        args: Vec::new(),
     });
     let windows = Some(Windows {
         binaries: all_arches,
+        args: Vec::new(),
     });
 
     let manifest = Config {
