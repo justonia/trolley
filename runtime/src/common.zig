@@ -49,6 +49,17 @@ pub fn setenvZ(name: [*:0]const u8, value: [*:0]const u8) bool {
 }
 extern "c" fn _putenv_s(name: [*:0]const u8, value: [*:0]const u8) c_int;
 
+extern "c" fn getenv(name: [*:0]const u8) ?[*:0]const u8;
+
+/// Platform-appropriate getenv. Returns the value or null.
+pub fn getenvZ(name: [*:0]const u8) ?[*:0]const u8 {
+    if (comptime builtin.os.tag == .windows) {
+        return getenv(name);
+    } else {
+        return std.posix.getenv(name);
+    }
+}
+
 /// Read the bundled `environment` file and call setenv for each KEY=VALUE line.
 /// Skips blank lines and lines starting with `#`.
 /// Must be called before ghostty_init so the child process inherits them.

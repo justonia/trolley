@@ -186,7 +186,14 @@ families = [
 [environment]
 env_file = ".env"
 variables = { MY_VAR = "value" }
+inject_pid_variable = "TROLLEY_PID"
 ```
+
+`inject_pid_variable` makes the runtime's PID available to the TUI process
+under the given environment variable name.
+
+The environment variable `TROLLEY_PID_FILE` can be set to a file path; the
+runtime will write its PID there on startup and delete the file on exit.
 
 ### `[embeds]` -- optional
 
