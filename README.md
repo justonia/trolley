@@ -149,7 +149,16 @@ The manifest file `trolley.toml` has the following sections:
 ```toml
 [linux]
 binaries = { x86_64 = "path/to/binary", aarch64 = "path/to/binary" }
+screenshot_path = "/tmp/my-app-screenshot.png"
 ```
+
+`binaries` maps architectures to executable paths.
+
+`screenshot_path` (optional) enables signal-triggered screenshots. When set, the
+runtime captures the rendered frame as a PNG to this path. On Linux/macOS send
+`SIGUSR1` to the process; on Windows signal the named event
+`Local\trolley-screenshot-<pid>`. The environment variable
+`TROLLEY_SCREENSHOT_PATH` overrides the config value on all platforms.
 
 ### `[gui]` -- optional
 

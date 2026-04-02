@@ -905,8 +905,9 @@ pub unsafe extern "C" fn trolley_load_manifest(
         window_config.max_width = manifest.gui.max_width.unwrap_or(0);
         window_config.max_height = manifest.gui.max_height.unwrap_or(0);
 
-        // screenshot_path lives in the per-platform section.
-        let screenshot_path: Option<&str> = if cfg!(target_os = "linux") {
+        // screenshot_path: env var TROLLEY_SCREENSHOT_PATH overrides the
+        // per-platform config value.
+        let config_screenshot_path: Option<&str> = if cfg!(target_os = "linux") {
             manifest.linux.as_ref().and_then(|l| l.screenshot_path.as_deref())
         } else if cfg!(target_os = "macos") {
             manifest.macos.as_ref().and_then(|m| m.screenshot_path.as_deref())
@@ -915,14 +916,15 @@ pub unsafe extern "C" fn trolley_load_manifest(
         } else {
             None
         };
+        let env_screenshot_path = std::env::var("TROLLEY_SCREENSHOT_PATH").ok();
+        let screenshot_path = env_screenshot_path.as_deref().or(config_screenshot_path);
         window_config.screenshot_path = match screenshot_path {
-            Some(p) => {
-                // Leak the CString so the pointer is valid for the process lifetime.
+            Some(p) if !p.is_empty() => {
                 let c_string = std::ffi::CString::new(p)
                     .context("screenshot_path contains interior null byte")?;
                 c_string.into_raw() as *const c_char
             }
-            None => std::ptr::null(),
+            _ => std::ptr::null(),
         };
 
         // Report ghostty config length so the caller can allocate.
