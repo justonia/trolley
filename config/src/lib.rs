@@ -391,11 +391,24 @@ pub struct Environment {
     pub env_file: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub variables: BTreeMap<String, String>,
+    /// If set, the runtime injects an environment variable with this name
+    /// containing the runtime process's PID. The TUI can use this to signal
+    /// the runtime (e.g. for screenshots).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub inject_pid_variable: Option<String>,
+    /// If set, the runtime writes its PID to this file path on startup and
+    /// deletes the file on exit. Useful for external tools that need to
+    /// signal the runtime.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pid_file: Option<String>,
 }
 
 impl Environment {
     pub fn is_default(&self) -> bool {
-        self.env_file.is_none() && self.variables.is_empty()
+        self.env_file.is_none()
+            && self.variables.is_empty()
+            && self.inject_pid_variable.is_none()
+            && self.pid_file.is_none()
     }
 }
 
@@ -428,6 +441,12 @@ pub struct Linux {
     pub args: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub appimage: Option<AppImageConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub screenshot_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_dump_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_dump_format: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -436,6 +455,12 @@ pub struct Macos {
     pub binaries: BTreeMap<Arch, String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub args: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub screenshot_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_dump_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_dump_format: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -450,6 +475,12 @@ pub struct Windows {
     /// Defaults to true; set to false to opt out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub precise_timer: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub screenshot_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_dump_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_dump_format: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -931,6 +962,20 @@ pub struct TrolleyGuiConfig {
     pub max_height: u32,
     /// Windows: request 1ms timer resolution. 0 = false, 1 = true (default).
     pub win_precise_timer: u8,
+    /// Screenshot output path. NULL = screenshots disabled.
+    /// This pointer is leaked and valid for the process lifetime.
+    pub screenshot_path: *const c_char,
+    /// Environment variable name for PID injection. NULL = disabled.
+    /// This pointer is leaked and valid for the process lifetime.
+    pub inject_pid_variable: *const c_char,
+    /// File path to write the PID to. NULL = disabled.
+    /// This pointer is leaked and valid for the process lifetime.
+    pub pid_file: *const c_char,
+    /// Text dump output path. NULL = text dump disabled.
+    /// This pointer is leaked and valid for the process lifetime.
+    pub text_dump_path: *const c_char,
+    /// Text dump format: 0 = plain (default), 1 = vt (ANSI escape codes), 2 = html.
+    pub text_dump_format: u8,
 }
 
 fn windows_precise_timer_enabled(manifest: &Config) -> bool {
@@ -974,6 +1019,91 @@ pub unsafe extern "C" fn trolley_load_manifest(
         window_config.max_width = manifest.gui.max_width.unwrap_or(0);
         window_config.max_height = manifest.gui.max_height.unwrap_or(0);
         window_config.win_precise_timer = u8::from(windows_precise_timer_enabled(&manifest));
+
+        // screenshot_path: env var TROLLEY_SCREENSHOT_PATH overrides the
+        // per-platform config value.
+        let config_screenshot_path: Option<&str> = if cfg!(target_os = "linux") {
+            manifest.linux.as_ref().and_then(|l| l.screenshot_path.as_deref())
+        } else if cfg!(target_os = "macos") {
+            manifest.macos.as_ref().and_then(|m| m.screenshot_path.as_deref())
+        } else if cfg!(target_os = "windows") {
+            manifest.windows.as_ref().and_then(|w| w.screenshot_path.as_deref())
+        } else {
+            None
+        };
+        let env_screenshot_path = std::env::var("TROLLEY_SCREENSHOT_PATH").ok();
+        let screenshot_path = env_screenshot_path.as_deref().or(config_screenshot_path);
+        window_config.screenshot_path = match screenshot_path {
+            Some(p) if !p.is_empty() => {
+                let c_string = std::ffi::CString::new(p)
+                    .context("screenshot_path contains interior null byte")?;
+                c_string.into_raw() as *const c_char
+            }
+            _ => std::ptr::null(),
+        };
+
+        // inject_pid_variable from [environment].
+        window_config.inject_pid_variable = match &manifest.environment.inject_pid_variable {
+            Some(name) if !name.is_empty() => {
+                let c_string = std::ffi::CString::new(name.as_str())
+                    .context("inject_pid_variable contains interior null byte")?;
+                c_string.into_raw() as *const c_char
+            }
+            _ => std::ptr::null(),
+        };
+
+        // pid_file: env var TROLLEY_PID_FILE overrides config value.
+        let env_pid_file = std::env::var("TROLLEY_PID_FILE").ok();
+        let pid_file = env_pid_file.as_deref()
+            .or(manifest.environment.pid_file.as_deref());
+        window_config.pid_file = match pid_file {
+            Some(p) if !p.is_empty() => {
+                let c_string = std::ffi::CString::new(p)
+                    .context("pid_file contains interior null byte")?;
+                c_string.into_raw() as *const c_char
+            }
+            _ => std::ptr::null(),
+        };
+
+        // text_dump_path: env var TROLLEY_TEXT_DUMP_PATH overrides per-platform config.
+        let config_text_dump_path: Option<&str> = if cfg!(target_os = "linux") {
+            manifest.linux.as_ref().and_then(|l| l.text_dump_path.as_deref())
+        } else if cfg!(target_os = "macos") {
+            manifest.macos.as_ref().and_then(|m| m.text_dump_path.as_deref())
+        } else if cfg!(target_os = "windows") {
+            manifest.windows.as_ref().and_then(|w| w.text_dump_path.as_deref())
+        } else {
+            None
+        };
+        let env_text_dump_path = std::env::var("TROLLEY_TEXT_DUMP_PATH").ok();
+        let text_dump_path = env_text_dump_path.as_deref().or(config_text_dump_path);
+        window_config.text_dump_path = match text_dump_path {
+            Some(p) if !p.is_empty() => {
+                let c_string = std::ffi::CString::new(p)
+                    .context("text_dump_path contains interior null byte")?;
+                c_string.into_raw() as *const c_char
+            }
+            _ => std::ptr::null(),
+        };
+
+        // text_dump_format: env var TROLLEY_TEXT_DUMP_FORMAT overrides per-platform config.
+        // Values: "plain" (0, default), "vt" (1), "html" (2).
+        let config_text_dump_format: Option<&str> = if cfg!(target_os = "linux") {
+            manifest.linux.as_ref().and_then(|l| l.text_dump_format.as_deref())
+        } else if cfg!(target_os = "macos") {
+            manifest.macos.as_ref().and_then(|m| m.text_dump_format.as_deref())
+        } else if cfg!(target_os = "windows") {
+            manifest.windows.as_ref().and_then(|w| w.text_dump_format.as_deref())
+        } else {
+            None
+        };
+        let env_text_dump_format = std::env::var("TROLLEY_TEXT_DUMP_FORMAT").ok();
+        let text_dump_format = env_text_dump_format.as_deref().or(config_text_dump_format);
+        window_config.text_dump_format = match text_dump_format {
+            Some("vt") => 1,
+            Some("html") => 2,
+            _ => 0, // plain
+        };
 
         // Report ghostty config length so the caller can allocate.
         let config_string = ghostty_config_string(&manifest);

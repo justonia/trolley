@@ -43,15 +43,24 @@ pub fn run(path: Option<String>) -> Result<()> {
         binaries: all_arches.clone(),
         args: Vec::new(),
         appimage: None,
+        screenshot_path: None,
+        text_dump_path: None,
+        text_dump_format: None,
     });
     let macos = Some(Macos {
         binaries: all_arches.clone(),
         args: Vec::new(),
+        screenshot_path: None,
+        text_dump_path: None,
+        text_dump_format: None,
     });
     let windows = Some(Windows {
         binaries: all_arches,
         args: Vec::new(),
         precise_timer: None,
+        screenshot_path: None,
+        text_dump_path: None,
+        text_dump_format: None,
     });
 
     let manifest = Config {

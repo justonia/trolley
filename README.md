@@ -150,7 +150,10 @@ The manifest file `trolley.toml` has the following sections:
 [linux]
 binaries = { x86_64 = "path/to/binary", aarch64 = "path/to/binary" }
 args = ["--verbose", "--port=9000"]
+screenshot_path = "/tmp/my-app-screenshot.png"
 ```
+
+`binaries` maps architectures to executable paths.
 
 `args` is optional and platform-specific. Trolley appends these entries to the
 default bundled command it generates for your app.
@@ -175,6 +178,19 @@ binaries = { x86_64 = "path/to/app.exe" }
 precise_timer = false
 ```
 
+`screenshot_path` (optional) enables signal-triggered screenshots. When set, the
+runtime captures the rendered frame as a PNG to this path. On Linux/macOS send
+`SIGUSR1` to the process; on Windows signal the named event
+`Local\trolley-screenshot-<pid>`. The environment variable
+`TROLLEY_SCREENSHOT_PATH` overrides the config value on all platforms.
+
+`text_dump_path` (optional) enables signal-triggered text dumps of the terminal
+screen content. On Linux/macOS send `SIGUSR2`; on Windows signal the named event
+`Local\trolley-textdump-<pid>`. `text_dump_format` selects the output format:
+`plain` (default, no styling), `vt` (ANSI escape codes), or `html` (inline CSS).
+The environment variables `TROLLEY_TEXT_DUMP_PATH` and `TROLLEY_TEXT_DUMP_FORMAT`
+override the config values.
+
 ### `[gui]` -- optional
 
 `initial_width`, `initial_height`, `resizable`, `min_width`, `min_height`,
@@ -196,7 +212,16 @@ families = [
 [environment]
 env_file = ".env"
 variables = { MY_VAR = "value" }
+inject_pid_variable = "TROLLEY_PID"
+pid_file = "/tmp/my-app.pid"
 ```
+
+`inject_pid_variable` makes the runtime's PID available to the TUI process
+under the given environment variable name. `pid_file` writes the PID to
+the given path on startup and deletes it on exit. Both are useful for
+signaling the runtime from the TUI or external tools (e.g. triggering a
+screenshot via `kill -USR1`). The environment variable `TROLLEY_PID_FILE`
+overrides `pid_file`.
 
 ### `[embeds]` -- optional
 

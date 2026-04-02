@@ -123,6 +123,16 @@ extern "user32" fn LoadImageW(
     fuLoad: u32,
 ) callconv(.winapi) ?*anyopaque;
 
+extern "kernel32" fn CreateEventW(
+    lpEventAttributes: ?*anyopaque,
+    bManualReset: BOOL,
+    bInitialState: BOOL,
+    lpName: ?[*:0]const u16,
+) callconv(.winapi) ?*anyopaque;
+
+extern "kernel32" fn GetCurrentProcessId() callconv(.winapi) u32;
+
+
 extern "kernel32" fn ExitProcess(
     uExitCode: u32,
 ) callconv(.winapi) noreturn;
@@ -134,6 +144,11 @@ extern "winmm" fn timeBeginPeriod(
 extern "winmm" fn timeEndPeriod(
     uPeriod: u32,
 ) callconv(.winapi) u32;
+
+extern "kernel32" fn SetConsoleCtrlHandler(
+    HandlerRoutine: ?*const fn (u32) callconv(.winapi) BOOL,
+    Add: BOOL,
+) callconv(.winapi) BOOL;
 
 extern "opengl32" fn wglGetProcAddress(
     lpszProc: [*:0]const u8,
@@ -239,6 +254,11 @@ var g_window_config: trolley.TrolleyGuiConfig = .{
     .max_width = 0,
     .max_height = 0,
     .win_precise_timer = 1,
+    .screenshot_path = null,
+    .inject_pid_variable = null,
+    .pid_file = null,
+    .text_dump_path = null,
+    .text_dump_format = 0,
 };
 
 fn loadBundledWindowIcon(width: i32, height: i32) ?wam.HICON {
@@ -262,6 +282,19 @@ fn applyWindowIcons(hwnd: HWND) void {
         _ = SendMessageW(hwnd, WM_SETICON, ICON_SMALL, @as(LPARAM, @intCast(@intFromPtr(icon))));
     }
 }
+
+/// Console control handler: delete PID file on Ctrl+C / close / shutdown.
+fn consoleCtrlHandler(_: u32) callconv(.winapi) BOOL {
+    if (g_window_config.pid_file) |path| {
+        std.fs.cwd().deleteFileZ(path) catch {};
+    }
+    return FALSE; // Let the default handler run (terminate process).
+}
+
+/// Named event handle for screenshot trigger (NULL if not configured).
+var g_screenshot_event: ?*anyopaque = null;
+/// Named event handle for text dump trigger (NULL if not configured).
+var g_text_dump_event: ?*anyopaque = null;
 
 // ---------------------------------------------------------------------------
 // WGL ↔ ghostty OpenGL context bridge
@@ -928,6 +961,22 @@ pub fn main() !void {
     // -- Load bundled environment variables (must precede ghostty_init) --
     common.loadBundledEnvironment();
 
+    // -- Inject runtime PID as environment variable if configured --
+    var pid_buf: [16]u8 = undefined;
+    const pid_str = std.fmt.bufPrintZ(&pid_buf, "{d}", .{GetCurrentProcessId()}) catch unreachable;
+    if (g_window_config.inject_pid_variable) |varname| {
+        _ = common.setenvZ(varname, pid_str.ptr);
+    }
+
+    // -- Write PID file if configured, and register cleanup handler --
+    if (g_window_config.pid_file) |path| {
+        if (std.fs.cwd().createFileZ(path, .{})) |file| {
+            file.writeAll(pid_str) catch {};
+            file.close();
+        } else |_| {}
+        _ = SetConsoleCtrlHandler(consoleCtrlHandler, TRUE);
+    }
+
     // -- Register bundled fonts (must precede ghostty_init) --
     registerBundledFonts();
 
@@ -1080,7 +1129,76 @@ pub fn main() !void {
     // -- Show window --
     _ = wam.ShowWindow(hwnd, wam.SW_SHOW);
 
+    // -- Create named event for screenshot trigger --
+    // Event name: "Local\trolley-screenshot-<pid>"
+    // Auto-reset (bManualReset=FALSE) so the event clears after one wait.
+    if (g_window_config.screenshot_path) |ss_path| {
+        var name_buf: [64]u16 = undefined;
+        const pid = GetCurrentProcessId();
+        const prefix = std.unicode.utf8ToUtf16LeStringLiteral("Local\\trolley-screenshot-");
+        @memcpy(name_buf[0..prefix.len], prefix);
+        var pos: usize = prefix.len;
+        // Format PID as decimal digits for event name.
+        var tmp: [10]u8 = undefined;
+        const pid_digits = std.fmt.bufPrint(&tmp, "{d}", .{pid}) catch unreachable;
+        for (pid_digits) |ch| {
+            name_buf[pos] = ch;
+            pos += 1;
+        }
+        name_buf[pos] = 0; // null-terminate
+        g_screenshot_event = CreateEventW(null, FALSE, FALSE, @ptrCast(&name_buf));
+
+        var event_name_utf8: [64]u8 = undefined;
+        var utf8_len: usize = 0;
+        for (name_buf[0..pos]) |wch| {
+            event_name_utf8[utf8_len] = @intCast(wch & 0x7f);
+            utf8_len += 1;
+        }
+        std.debug.print("trolley: screenshot_path={s} pid={d} event=\"{s}\" handle={?}\n", .{
+            ss_path,
+            pid,
+            event_name_utf8[0..utf8_len],
+            g_screenshot_event,
+        });
+    } else {
+        std.debug.print("trolley: screenshot_path not configured, screenshots disabled\n", .{});
+    }
+
+    // -- Create named event for text dump trigger --
+    if (g_window_config.text_dump_path != null) {
+        var name_buf: [64]u16 = undefined;
+        const pid = GetCurrentProcessId();
+        const prefix = std.unicode.utf8ToUtf16LeStringLiteral("Local\\trolley-textdump-");
+        @memcpy(name_buf[0..prefix.len], prefix);
+        var pos: usize = prefix.len;
+        var tmp: [10]u8 = undefined;
+        const pid_digits = std.fmt.bufPrint(&tmp, "{d}", .{pid}) catch unreachable;
+        for (pid_digits) |ch| {
+            name_buf[pos] = ch;
+            pos += 1;
+        }
+        name_buf[pos] = 0;
+        g_text_dump_event = CreateEventW(null, FALSE, FALSE, @ptrCast(&name_buf));
+    }
+
     // -- Event loop --
+    // Build handles array from configured events.
+    var wait_handles: [2]?*anyopaque = .{ null, null };
+    var wait_count: u32 = 0;
+    const screenshot_wait_idx: ?u32 = if (g_screenshot_event) |h| blk: {
+        wait_handles[wait_count] = h;
+        const idx = wait_count;
+        wait_count += 1;
+        break :blk idx;
+    } else null;
+    const text_dump_wait_idx: ?u32 = if (g_text_dump_event) |h| blk: {
+        wait_handles[wait_count] = h;
+        const idx = wait_count;
+        wait_count += 1;
+        break :blk idx;
+    } else null;
+    const WAIT_OBJECT_0: u32 = 0;
+
     var msg: wam.MSG = undefined;
     while (true) {
         while (wam.PeekMessageW(&msg, null, 0, 0, wam.PM_REMOVE) != 0) {
@@ -1092,8 +1210,44 @@ pub fn main() !void {
 
         ghostty.ghostty_app_tick(g_app);
 
-        // Wait for next message or timeout (~16ms for 60fps)
-        _ = MsgWaitForMultipleObjects(0, null, FALSE, 16, QS_ALLINPUT);
+        // Wait for next message, events, or timeout (~16ms for 60fps)
+        const wait_result = MsgWaitForMultipleObjects(
+            wait_count,
+            if (wait_count > 0) @as(?*const ?*anyopaque, @ptrCast(&wait_handles)) else null,
+            FALSE,
+            16,
+            QS_ALLINPUT,
+        );
+
+        if (screenshot_wait_idx) |idx| {
+            if (wait_result == WAIT_OBJECT_0 + idx) {
+                if (g_window_config.screenshot_path) |path| {
+                    ghostty.ghostty_surface_screenshot(g_surface, path);
+                }
+            }
+        }
+        if (text_dump_wait_idx) |idx| {
+            if (wait_result == WAIT_OBJECT_0 + idx) {
+                if (g_window_config.text_dump_path) |path| {
+                    var out_ptr: [*c]const u8 = null;
+                    var out_len: usize = 0;
+                    if (ghostty.ghostty_surface_text_dump(g_surface, g_window_config.text_dump_format, &out_ptr, &out_len)) {
+                        defer ghostty.ghostty_surface_free_dump(out_ptr, out_len);
+                        if (out_ptr) |p| {
+                            if (std.fs.cwd().createFileZ(path, .{})) |file| {
+                                defer file.close();
+                                file.writeAll(p[0..out_len]) catch {};
+                            } else |_| {}
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Clean up PID file before exit.
+    if (g_window_config.pid_file) |path| {
+        std.fs.cwd().deleteFileZ(path) catch {};
     }
 
     if (precise_timer) {

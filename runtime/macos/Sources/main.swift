@@ -11,7 +11,12 @@ var gApp: ghostty_app_t?
 var gWindowConfig = TrolleyGuiConfig(
     initial_width: 0, initial_height: 0, resizable: -1,
     min_width: 0, min_height: 0, max_width: 0, max_height: 0,
-    win_precise_timer: 0
+    win_precise_timer: 0,
+    screenshot_path: nil,
+    inject_pid_variable: nil,
+    pid_file: nil,
+    text_dump_path: nil,
+    text_dump_format: 0
 )
 
 // ---------------------------------------------------------------------------
@@ -460,6 +465,35 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // -- Load bundled environment variables (must precede ghostty_init) --
         loadBundledEnvironment()
 
+        // -- Inject runtime PID as environment variable if configured --
+        let pid = ProcessInfo.processInfo.processIdentifier
+        let pidStr = "\(pid)"
+        if let varname = gWindowConfig.inject_pid_variable {
+            setenv(String(cString: varname), pidStr, 1)
+        }
+
+        // -- Write PID file if configured, and register cleanup handlers --
+        if let pidFilePath = gWindowConfig.pid_file {
+            let path = String(cString: pidFilePath)
+            try? pidStr.write(toFile: path, atomically: true, encoding: .utf8)
+
+            // Clean up PID file on SIGTERM/SIGINT.
+            for sig: Int32 in [SIGTERM, SIGINT] {
+                let source = DispatchSource.makeSignalSource(signal: sig, queue: .main)
+                signal(sig, SIG_IGN)
+                source.setEventHandler {
+                    try? FileManager.default.removeItem(atPath: path)
+                    // Re-raise with default handler for correct exit status.
+                    signal(sig, SIG_DFL)
+                    raise(sig)
+                }
+                source.resume()
+                // Prevent deallocation by leaking the source intentionally.
+                withExtendedLifetime(source) {}
+                _ = Unmanaged.passRetained(source as AnyObject)
+            }
+        }
+
         // -- Register bundled fonts --
         registerBundledFonts()
 
@@ -583,4 +617,47 @@ let delegate = AppDelegate()
 let app = NSApplication.shared
 app.setActivationPolicy(.regular)
 app.delegate = delegate
+
+// Register SIGUSR1 for screenshots (only if screenshot_path is configured).
+var screenshotSignalSource: DispatchSourceSignal?
+if gWindowConfig.screenshot_path != nil {
+    signal(SIGUSR1, SIG_IGN)
+    let source = DispatchSource.makeSignalSource(signal: SIGUSR1, queue: .main)
+    source.setEventHandler {
+        guard let surface = gSurface,
+              let path = gWindowConfig.screenshot_path else { return }
+        ghostty_surface_screenshot(surface, path)
+    }
+    source.resume()
+    screenshotSignalSource = source  // prevent deallocation
+}
+
+// Register SIGUSR2 for text dump (only if text_dump_path is configured).
+var textDumpSignalSource: DispatchSourceSignal?
+if gWindowConfig.text_dump_path != nil {
+    signal(SIGUSR2, SIG_IGN)
+    let source = DispatchSource.makeSignalSource(signal: SIGUSR2, queue: .main)
+    source.setEventHandler {
+        guard let surface = gSurface,
+              let path = gWindowConfig.text_dump_path else { return }
+        var outPtr: UnsafePointer<UInt8>?
+        var outLen: Int = 0
+        if ghostty_surface_text_dump(surface, gWindowConfig.text_dump_format, &outPtr, &outLen) {
+            if let ptr = outPtr {
+                defer { ghostty_surface_free_dump(ptr, outLen) }
+                let data = Data(bytes: ptr, count: outLen)
+                let pathStr = String(cString: path)
+                try? data.write(to: URL(fileURLWithPath: pathStr))
+            }
+        }
+    }
+    source.resume()
+    textDumpSignalSource = source
+}
+
 app.run()
+
+// Clean up PID file on exit.
+if let pidFilePath = gWindowConfig.pid_file {
+    try? FileManager.default.removeItem(atPath: String(cString: pidFilePath))
+}
