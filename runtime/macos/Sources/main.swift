@@ -10,7 +10,8 @@ var gSurface: ghostty_surface_t?
 var gApp: ghostty_app_t?
 var gWindowConfig = TrolleyGuiConfig(
     initial_width: 0, initial_height: 0, resizable: -1,
-    min_width: 0, min_height: 0, max_width: 0, max_height: 0
+    min_width: 0, min_height: 0, max_width: 0, max_height: 0,
+    screenshot_path: nil
 )
 
 // ---------------------------------------------------------------------------
@@ -582,4 +583,19 @@ let delegate = AppDelegate()
 let app = NSApplication.shared
 app.setActivationPolicy(.regular)
 app.delegate = delegate
+
+// Register SIGUSR1 for screenshots (only if screenshot_path is configured).
+var screenshotSignalSource: DispatchSourceSignal?
+if gWindowConfig.screenshot_path != nil {
+    signal(SIGUSR1, SIG_IGN)
+    let source = DispatchSource.makeSignalSource(signal: SIGUSR1, queue: .main)
+    source.setEventHandler {
+        guard let surface = gSurface,
+              let path = gWindowConfig.screenshot_path else { return }
+        ghostty_surface_screenshot(surface, path)
+    }
+    source.resume()
+    screenshotSignalSource = source  // prevent deallocation
+}
+
 app.run()

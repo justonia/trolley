@@ -338,6 +338,8 @@ pub struct Gui {
     pub max_width: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_height: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub screenshot_path: Option<String>,
 }
 
 impl Gui {
@@ -349,6 +351,7 @@ impl Gui {
             && self.min_height.is_none()
             && self.max_width.is_none()
             && self.max_height.is_none()
+            && self.screenshot_path.is_none()
     }
 }
 
@@ -860,6 +863,9 @@ pub struct TrolleyGuiConfig {
     pub max_width: u32,
     /// Maximum height in pixels. 0 = unset.
     pub max_height: u32,
+    /// Screenshot output path. NULL = screenshots disabled.
+    /// This pointer is leaked and valid for the process lifetime.
+    pub screenshot_path: *const c_char,
 }
 
 /// Load a trolley manifest and extract the window and environment configs.
@@ -895,6 +901,15 @@ pub unsafe extern "C" fn trolley_load_manifest(
         window_config.min_height = manifest.gui.min_height.unwrap_or(0);
         window_config.max_width = manifest.gui.max_width.unwrap_or(0);
         window_config.max_height = manifest.gui.max_height.unwrap_or(0);
+        window_config.screenshot_path = match &manifest.gui.screenshot_path {
+            Some(p) => {
+                // Leak the CString so the pointer is valid for the process lifetime.
+                let c_string = std::ffi::CString::new(p.as_str())
+                    .context("screenshot_path contains interior null byte")?;
+                c_string.into_raw() as *const c_char
+            }
+            None => std::ptr::null(),
+        };
 
         // Report ghostty config length so the caller can allocate.
         let config_string = ghostty_config_string(&manifest);

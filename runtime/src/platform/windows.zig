@@ -93,6 +93,15 @@ extern "kernel32" fn GetModuleHandleW(
     lpModuleName: ?[*:0]const u16,
 ) callconv(.winapi) ?*anyopaque;
 
+extern "kernel32" fn CreateEventW(
+    lpEventAttributes: ?*anyopaque,
+    bManualReset: BOOL,
+    bInitialState: BOOL,
+    lpName: ?[*:0]const u16,
+) callconv(.winapi) ?*anyopaque;
+
+extern "kernel32" fn GetCurrentProcessId() callconv(.winapi) u32;
+
 extern "kernel32" fn ExitProcess(
     uExitCode: u32,
 ) callconv(.winapi) noreturn;
@@ -198,7 +207,11 @@ var g_window_config: trolley.TrolleyGuiConfig = .{
     .min_height = 0,
     .max_width = 0,
     .max_height = 0,
+    .screenshot_path = null,
 };
+
+/// Named event handle for screenshot trigger (NULL if screenshots not configured).
+var g_screenshot_event: ?*anyopaque = null;
 
 // ---------------------------------------------------------------------------
 // WGL ↔ ghostty OpenGL context bridge
@@ -1009,7 +1022,46 @@ pub fn main() !void {
     // -- Show window --
     _ = wam.ShowWindow(hwnd, wam.SW_SHOW);
 
+    // -- Create named event for screenshot trigger --
+    // Event name: "Local\trolley-screenshot-<pid>"
+    // Auto-reset (bManualReset=FALSE) so the event clears after one wait.
+    if (g_window_config.screenshot_path) |ss_path| {
+        var name_buf: [64]u16 = undefined;
+        const pid = GetCurrentProcessId();
+        const prefix = std.unicode.utf8ToUtf16LeStringLiteral("Local\\trolley-screenshot-");
+        @memcpy(name_buf[0..prefix.len], prefix);
+        var pos: usize = prefix.len;
+        // Format PID as decimal digits.
+        var tmp: [10]u8 = undefined;
+        const pid_str = std.fmt.bufPrint(&tmp, "{d}", .{pid}) catch unreachable;
+        for (pid_str) |ch| {
+            name_buf[pos] = ch;
+            pos += 1;
+        }
+        name_buf[pos] = 0; // null-terminate
+        g_screenshot_event = CreateEventW(null, FALSE, FALSE, @ptrCast(&name_buf));
+
+        var event_name_utf8: [64]u8 = undefined;
+        var utf8_len: usize = 0;
+        for (name_buf[0..pos]) |wch| {
+            event_name_utf8[utf8_len] = @intCast(wch & 0x7f);
+            utf8_len += 1;
+        }
+        std.debug.print("trolley: screenshot_path={s} pid={d} event=\"{s}\" handle={?}\n", .{
+            ss_path,
+            pid,
+            event_name_utf8[0..utf8_len],
+            g_screenshot_event,
+        });
+    } else {
+        std.debug.print("trolley: screenshot_path not configured, screenshots disabled\n", .{});
+    }
+
     // -- Event loop --
+    const wait_count: u32 = if (g_screenshot_event != null) 1 else 0;
+    const wait_handles: [1]?*anyopaque = .{g_screenshot_event};
+    const WAIT_OBJECT_0: u32 = 0;
+
     var msg: wam.MSG = undefined;
     while (true) {
         while (wam.PeekMessageW(&msg, null, 0, 0, wam.PM_REMOVE) != 0) {
@@ -1021,8 +1073,21 @@ pub fn main() !void {
 
         ghostty.ghostty_app_tick(g_app);
 
-        // Wait for next message or timeout (~16ms for 60fps)
-        _ = MsgWaitForMultipleObjects(0, null, FALSE, 16, QS_ALLINPUT);
+        // Wait for next message, screenshot event, or timeout (~16ms for 60fps)
+        const wait_result = MsgWaitForMultipleObjects(
+            wait_count,
+            if (wait_count > 0) @as(?*const ?*anyopaque, @ptrCast(&wait_handles)) else null,
+            FALSE,
+            16,
+            QS_ALLINPUT,
+        );
+
+        // If the screenshot event was signaled (auto-resets after wait)
+        if (wait_count > 0 and wait_result == WAIT_OBJECT_0) {
+            if (g_window_config.screenshot_path) |path| {
+                ghostty.ghostty_surface_screenshot(g_surface, path);
+            }
+        }
     }
 
     ExitProcess(0);
