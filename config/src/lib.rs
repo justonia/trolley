@@ -441,6 +441,10 @@ pub struct Linux {
     pub appimage: Option<AppImageConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub screenshot_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_dump_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_dump_format: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -449,6 +453,10 @@ pub struct Macos {
     pub binaries: BTreeMap<Arch, String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub screenshot_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_dump_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_dump_format: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -457,6 +465,10 @@ pub struct Windows {
     pub binaries: BTreeMap<Arch, String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub screenshot_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_dump_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_dump_format: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -888,6 +900,11 @@ pub struct TrolleyGuiConfig {
     /// File path to write the PID to. NULL = disabled.
     /// This pointer is leaked and valid for the process lifetime.
     pub pid_file: *const c_char,
+    /// Text dump output path. NULL = text dump disabled.
+    /// This pointer is leaked and valid for the process lifetime.
+    pub text_dump_path: *const c_char,
+    /// Text dump format: 0 = plain (default), 1 = vt (ANSI escape codes), 2 = html.
+    pub text_dump_format: u8,
 }
 
 /// Load a trolley manifest and extract the window and environment configs.
@@ -967,6 +984,46 @@ pub unsafe extern "C" fn trolley_load_manifest(
                 c_string.into_raw() as *const c_char
             }
             _ => std::ptr::null(),
+        };
+
+        // text_dump_path: env var TROLLEY_TEXT_DUMP_PATH overrides per-platform config.
+        let config_text_dump_path: Option<&str> = if cfg!(target_os = "linux") {
+            manifest.linux.as_ref().and_then(|l| l.text_dump_path.as_deref())
+        } else if cfg!(target_os = "macos") {
+            manifest.macos.as_ref().and_then(|m| m.text_dump_path.as_deref())
+        } else if cfg!(target_os = "windows") {
+            manifest.windows.as_ref().and_then(|w| w.text_dump_path.as_deref())
+        } else {
+            None
+        };
+        let env_text_dump_path = std::env::var("TROLLEY_TEXT_DUMP_PATH").ok();
+        let text_dump_path = env_text_dump_path.as_deref().or(config_text_dump_path);
+        window_config.text_dump_path = match text_dump_path {
+            Some(p) if !p.is_empty() => {
+                let c_string = std::ffi::CString::new(p)
+                    .context("text_dump_path contains interior null byte")?;
+                c_string.into_raw() as *const c_char
+            }
+            _ => std::ptr::null(),
+        };
+
+        // text_dump_format: env var TROLLEY_TEXT_DUMP_FORMAT overrides per-platform config.
+        // Values: "plain" (0, default), "vt" (1), "html" (2).
+        let config_text_dump_format: Option<&str> = if cfg!(target_os = "linux") {
+            manifest.linux.as_ref().and_then(|l| l.text_dump_format.as_deref())
+        } else if cfg!(target_os = "macos") {
+            manifest.macos.as_ref().and_then(|m| m.text_dump_format.as_deref())
+        } else if cfg!(target_os = "windows") {
+            manifest.windows.as_ref().and_then(|w| w.text_dump_format.as_deref())
+        } else {
+            None
+        };
+        let env_text_dump_format = std::env::var("TROLLEY_TEXT_DUMP_FORMAT").ok();
+        let text_dump_format = env_text_dump_format.as_deref().or(config_text_dump_format);
+        window_config.text_dump_format = match text_dump_format {
+            Some("vt") => 1,
+            Some("html") => 2,
+            _ => 0, // plain
         };
 
         // Report ghostty config length so the caller can allocate.

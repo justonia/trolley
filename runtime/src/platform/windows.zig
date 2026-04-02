@@ -215,6 +215,8 @@ var g_window_config: trolley.TrolleyGuiConfig = .{
     .screenshot_path = null,
     .inject_pid_variable = null,
     .pid_file = null,
+    .text_dump_path = null,
+    .text_dump_format = 0,
 };
 
 /// Console control handler: delete PID file on Ctrl+C / close / shutdown.
@@ -225,8 +227,10 @@ fn consoleCtrlHandler(_: u32) callconv(.winapi) BOOL {
     return FALSE; // Let the default handler run (terminate process).
 }
 
-/// Named event handle for screenshot trigger (NULL if screenshots not configured).
+/// Named event handle for screenshot trigger (NULL if not configured).
 var g_screenshot_event: ?*anyopaque = null;
+/// Named event handle for text dump trigger (NULL if not configured).
+var g_text_dump_event: ?*anyopaque = null;
 
 // ---------------------------------------------------------------------------
 // WGL ↔ ghostty OpenGL context bridge
@@ -1088,9 +1092,39 @@ pub fn main() !void {
         std.debug.print("trolley: screenshot_path not configured, screenshots disabled\n", .{});
     }
 
+    // -- Create named event for text dump trigger --
+    if (g_window_config.text_dump_path != null) {
+        var name_buf: [64]u16 = undefined;
+        const pid = GetCurrentProcessId();
+        const prefix = std.unicode.utf8ToUtf16LeStringLiteral("Local\\trolley-textdump-");
+        @memcpy(name_buf[0..prefix.len], prefix);
+        var pos: usize = prefix.len;
+        var tmp: [10]u8 = undefined;
+        const pid_digits = std.fmt.bufPrint(&tmp, "{d}", .{pid}) catch unreachable;
+        for (pid_digits) |ch| {
+            name_buf[pos] = ch;
+            pos += 1;
+        }
+        name_buf[pos] = 0;
+        g_text_dump_event = CreateEventW(null, FALSE, FALSE, @ptrCast(&name_buf));
+    }
+
     // -- Event loop --
-    const wait_count: u32 = if (g_screenshot_event != null) 1 else 0;
-    const wait_handles: [1]?*anyopaque = .{g_screenshot_event};
+    // Build handles array from configured events.
+    var wait_handles: [2]?*anyopaque = .{ null, null };
+    var wait_count: u32 = 0;
+    const screenshot_wait_idx: ?u32 = if (g_screenshot_event) |h| blk: {
+        wait_handles[wait_count] = h;
+        const idx = wait_count;
+        wait_count += 1;
+        break :blk idx;
+    } else null;
+    const text_dump_wait_idx: ?u32 = if (g_text_dump_event) |h| blk: {
+        wait_handles[wait_count] = h;
+        const idx = wait_count;
+        wait_count += 1;
+        break :blk idx;
+    } else null;
     const WAIT_OBJECT_0: u32 = 0;
 
     var msg: wam.MSG = undefined;
@@ -1104,7 +1138,7 @@ pub fn main() !void {
 
         ghostty.ghostty_app_tick(g_app);
 
-        // Wait for next message, screenshot event, or timeout (~16ms for 60fps)
+        // Wait for next message, events, or timeout (~16ms for 60fps)
         const wait_result = MsgWaitForMultipleObjects(
             wait_count,
             if (wait_count > 0) @as(?*const ?*anyopaque, @ptrCast(&wait_handles)) else null,
@@ -1113,10 +1147,28 @@ pub fn main() !void {
             QS_ALLINPUT,
         );
 
-        // If the screenshot event was signaled (auto-resets after wait)
-        if (wait_count > 0 and wait_result == WAIT_OBJECT_0) {
-            if (g_window_config.screenshot_path) |path| {
-                ghostty.ghostty_surface_screenshot(g_surface, path);
+        if (screenshot_wait_idx) |idx| {
+            if (wait_result == WAIT_OBJECT_0 + idx) {
+                if (g_window_config.screenshot_path) |path| {
+                    ghostty.ghostty_surface_screenshot(g_surface, path);
+                }
+            }
+        }
+        if (text_dump_wait_idx) |idx| {
+            if (wait_result == WAIT_OBJECT_0 + idx) {
+                if (g_window_config.text_dump_path) |path| {
+                    var out_ptr: [*c]const u8 = null;
+                    var out_len: usize = 0;
+                    if (ghostty.ghostty_surface_text_dump(g_surface, g_window_config.text_dump_format, &out_ptr, &out_len)) {
+                        defer ghostty.ghostty_surface_free_dump(out_ptr, out_len);
+                        if (out_ptr) |p| {
+                            if (std.fs.cwd().createFileZ(path, .{})) |file| {
+                                defer file.close();
+                                file.writeAll(p[0..out_len]) catch {};
+                            } else |_| {}
+                        }
+                    }
+                }
             }
         }
     }

@@ -13,7 +13,9 @@ var gWindowConfig = TrolleyGuiConfig(
     min_width: 0, min_height: 0, max_width: 0, max_height: 0,
     screenshot_path: nil,
     inject_pid_variable: nil,
-    pid_file: nil
+    pid_file: nil,
+    text_dump_path: nil,
+    text_dump_format: 0
 )
 
 // ---------------------------------------------------------------------------
@@ -627,6 +629,29 @@ if gWindowConfig.screenshot_path != nil {
     }
     source.resume()
     screenshotSignalSource = source  // prevent deallocation
+}
+
+// Register SIGUSR2 for text dump (only if text_dump_path is configured).
+var textDumpSignalSource: DispatchSourceSignal?
+if gWindowConfig.text_dump_path != nil {
+    signal(SIGUSR2, SIG_IGN)
+    let source = DispatchSource.makeSignalSource(signal: SIGUSR2, queue: .main)
+    source.setEventHandler {
+        guard let surface = gSurface,
+              let path = gWindowConfig.text_dump_path else { return }
+        var outPtr: UnsafePointer<UInt8>?
+        var outLen: Int = 0
+        if ghostty_surface_text_dump(surface, gWindowConfig.text_dump_format, &outPtr, &outLen) {
+            if let ptr = outPtr {
+                defer { ghostty_surface_free_dump(ptr, outLen) }
+                let data = Data(bytes: ptr, count: outLen)
+                let pathStr = String(cString: path)
+                try? data.write(to: URL(fileURLWithPath: pathStr))
+            }
+        }
+    }
+    source.resume()
+    textDumpSignalSource = source
 }
 
 app.run()

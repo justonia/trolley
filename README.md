@@ -160,6 +160,13 @@ runtime captures the rendered frame as a PNG to this path. On Linux/macOS send
 `Local\trolley-screenshot-<pid>`. The environment variable
 `TROLLEY_SCREENSHOT_PATH` overrides the config value on all platforms.
 
+`text_dump_path` (optional) enables signal-triggered text dumps of the terminal
+screen content. On Linux/macOS send `SIGUSR2`; on Windows signal the named event
+`Local\trolley-textdump-<pid>`. `text_dump_format` selects the output format:
+`plain` (default, no styling), `vt` (ANSI escape codes), or `html` (inline CSS).
+The environment variables `TROLLEY_TEXT_DUMP_PATH` and `TROLLEY_TEXT_DUMP_FORMAT`
+override the config values.
+
 ### `[gui]` -- optional
 
 `initial_width`, `initial_height`, `resizable`, `min_width`, `min_height`,
