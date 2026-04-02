@@ -208,6 +208,7 @@ var g_window_config: trolley.TrolleyGuiConfig = .{
     .max_width = 0,
     .max_height = 0,
     .screenshot_path = null,
+    .inject_pid_variable = null,
 };
 
 /// Named event handle for screenshot trigger (NULL if screenshots not configured).
@@ -872,6 +873,13 @@ pub fn main() !void {
 
     // -- Load bundled environment variables (must precede ghostty_init) --
     common.loadBundledEnvironment();
+
+    // -- Inject runtime PID as environment variable if configured --
+    if (g_window_config.inject_pid_variable) |varname| {
+        var pid_buf: [16]u8 = undefined;
+        const pid_str = std.fmt.bufPrintZ(&pid_buf, "{d}", .{GetCurrentProcessId()}) catch unreachable;
+        _ = common.setenvZ(varname, pid_str.ptr);
+    }
 
     // -- Register bundled fonts (must precede ghostty_init) --
     registerBundledFonts();

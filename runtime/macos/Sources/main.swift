@@ -11,7 +11,8 @@ var gApp: ghostty_app_t?
 var gWindowConfig = TrolleyGuiConfig(
     initial_width: 0, initial_height: 0, resizable: -1,
     min_width: 0, min_height: 0, max_width: 0, max_height: 0,
-    screenshot_path: nil
+    screenshot_path: nil,
+    inject_pid_variable: nil
 )
 
 // ---------------------------------------------------------------------------
@@ -459,6 +460,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // -- Load bundled environment variables (must precede ghostty_init) --
         loadBundledEnvironment()
+
+        // -- Inject runtime PID as environment variable if configured --
+        if let varname = gWindowConfig.inject_pid_variable {
+            setenv(String(cString: varname), "\(ProcessInfo.processInfo.processIdentifier)", 1)
+        }
 
         // -- Register bundled fonts --
         registerBundledFonts()

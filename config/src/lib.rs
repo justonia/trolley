@@ -391,11 +391,18 @@ pub struct Environment {
     pub env_file: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub variables: BTreeMap<String, String>,
+    /// If set, the runtime injects an environment variable with this name
+    /// containing the runtime process's PID. The TUI can use this to signal
+    /// the runtime (e.g. for screenshots).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub inject_pid_variable: Option<String>,
 }
 
 impl Environment {
     pub fn is_default(&self) -> bool {
-        self.env_file.is_none() && self.variables.is_empty()
+        self.env_file.is_none()
+            && self.variables.is_empty()
+            && self.inject_pid_variable.is_none()
     }
 }
 
@@ -869,6 +876,9 @@ pub struct TrolleyGuiConfig {
     /// Screenshot output path. NULL = screenshots disabled.
     /// This pointer is leaked and valid for the process lifetime.
     pub screenshot_path: *const c_char,
+    /// Environment variable name for PID injection. NULL = disabled.
+    /// This pointer is leaked and valid for the process lifetime.
+    pub inject_pid_variable: *const c_char,
 }
 
 /// Load a trolley manifest and extract the window and environment configs.
@@ -922,6 +932,16 @@ pub unsafe extern "C" fn trolley_load_manifest(
             Some(p) if !p.is_empty() => {
                 let c_string = std::ffi::CString::new(p)
                     .context("screenshot_path contains interior null byte")?;
+                c_string.into_raw() as *const c_char
+            }
+            _ => std::ptr::null(),
+        };
+
+        // inject_pid_variable from [environment].
+        window_config.inject_pid_variable = match &manifest.environment.inject_pid_variable {
+            Some(name) if !name.is_empty() => {
+                let c_string = std::ffi::CString::new(name.as_str())
+                    .context("inject_pid_variable contains interior null byte")?;
                 c_string.into_raw() as *const c_char
             }
             _ => std::ptr::null(),
