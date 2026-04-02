@@ -193,7 +193,8 @@ inject_pid_variable = "TROLLEY_PID"
 under the given environment variable name.
 
 The environment variable `TROLLEY_PID_FILE` can be set to a file path; the
-runtime will write its PID there on startup and delete the file on exit.
+runtime will write its PID there after successful initialization and delete
+the file on exit. The runtime will abort if the PID file cannot be written.
 
 ### `[embeds]` -- optional
 
