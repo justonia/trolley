@@ -654,6 +654,7 @@ pub fn assemble_environment(project_dir: &Path, config: &Config) -> Result<Vec<u
 pub fn assemble_config(
     project_dir: &Path,
     config: &Config,
+    target: &Target,
     command_target: &str,
     font_family_names: &[String],
 ) -> Result<Vec<u8>> {
@@ -717,7 +718,15 @@ pub fn assemble_config(
     // Use ./ prefix so ghostty resolves the binary relative to CWD
     // (the runtime chdirs to its own directory at startup).
     if !config.ghostty.contains_key("command") {
-        write!(buf, "command = direct:./{command_target}\n")?;
+        let mut command = format!("command = direct:./{command_target}");
+        if let Some(args) = config.args_for(target) {
+            for arg in args {
+                command.push(' ');
+                command.push_str(arg);
+            }
+        }
+        command.push('\n');
+        buf.write_all(command.as_bytes())?;
     }
 
     Ok(buf)
@@ -727,7 +736,7 @@ pub fn assemble_config(
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
-    use trolley_config::{App, Arch, Embeds, Environment, Fonts, Gui, Linux};
+    use trolley_config::{App, Arch, Embeds, Environment, Fonts, Gui, Linux, Target};
 
     fn test_manifest() -> Config {
         Config {
@@ -740,6 +749,7 @@ mod tests {
             },
             linux: Some(Linux {
                 binaries: BTreeMap::from([(Arch::X86_64, "my-app".into())]),
+                args: Vec::new(),
                 appimage: None,
             }),
             macos: None,
@@ -835,7 +845,8 @@ mod tests {
     fn assemble_config_adds_default_command_when_not_overridden() {
         let dir = tempfile::tempdir().unwrap();
         let manifest = test_manifest();
-        let bytes = assemble_config(dir.path(), &manifest, "app_core", &[]).unwrap();
+        let bytes =
+            assemble_config(dir.path(), &manifest, &Target::X86_64Linux, "app_core", &[]).unwrap();
         let rendered = String::from_utf8(bytes).unwrap();
 
         assert!(rendered.contains("working-directory = inherit\n"));
@@ -850,7 +861,8 @@ mod tests {
             "command".into(),
             toml::Value::String("shell:./app_core".into()),
         );
-        let bytes = assemble_config(dir.path(), &manifest, "app_core", &[]).unwrap();
+        let bytes =
+            assemble_config(dir.path(), &manifest, &Target::X86_64Linux, "app_core", &[]).unwrap();
         let rendered = String::from_utf8(bytes).unwrap();
 
         assert!(rendered.contains("command = shell:./app_core\n"));
@@ -874,7 +886,8 @@ mod tests {
             .ghostty
             .insert("background".into(), toml::Value::String("111111".into()));
 
-        let bytes = assemble_config(dir.path(), &manifest, "app_core", &[]).unwrap();
+        let bytes =
+            assemble_config(dir.path(), &manifest, &Target::X86_64Linux, "app_core", &[]).unwrap();
         let rendered = String::from_utf8(bytes).unwrap();
 
         let theme_idx = rendered.find("background = 000000\n").unwrap();
@@ -889,10 +902,23 @@ mod tests {
         let mut manifest = test_manifest();
         manifest.embeds.shaders = vec!["shaders/crt.glsl".into(), "shaders/bloom.glsl".into()];
 
-        let bytes = assemble_config(dir.path(), &manifest, "app_core", &[]).unwrap();
+        let bytes =
+            assemble_config(dir.path(), &manifest, &Target::X86_64Linux, "app_core", &[]).unwrap();
         let rendered = String::from_utf8(bytes).unwrap();
         assert!(rendered.contains("custom-shader = shaders/crt.glsl\n"));
         assert!(rendered.contains("custom-shader = shaders/bloom.glsl\n"));
+    }
+
+    #[test]
+    fn assemble_config_appends_platform_args_to_default_command() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut manifest = test_manifest();
+        manifest.linux.as_mut().unwrap().args = vec!["--verbose".into(), "--port=9000".into()];
+
+        let bytes =
+            assemble_config(dir.path(), &manifest, &Target::X86_64Linux, "app_core", &[]).unwrap();
+        let rendered = String::from_utf8(bytes).unwrap();
+        assert!(rendered.contains("command = direct:./app_core --verbose --port=9000\n"));
     }
 
     #[test]

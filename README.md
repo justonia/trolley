@@ -149,7 +149,21 @@ The manifest file `trolley.toml` has the following sections:
 ```toml
 [linux]
 binaries = { x86_64 = "path/to/binary", aarch64 = "path/to/binary" }
+args = ["--verbose", "--port=9000"]
 ```
+
+`args` is optional and platform-specific. Trolley appends these entries to the
+default bundled command it generates for your app.
+
+This comes with an important caveat: arguments must not contain whitespace or
+control characters. The culprit is Ghostty's current `direct:` command parser,
+which splits arguments on spaces instead of accepting a structured argv array.
+That means values such as `"Jane Doe"` or `"--message=hello world"` cannot be
+represented safely through Trolley's default command path today.
+
+If you need full shell quoting or arguments containing spaces, you must fall
+back to `[ghostty].command` and accept shell semantics. `args` cannot be used
+together with `[ghostty].command`.
 
 On Windows, 1ms timer resolution is enabled by default instead of the usual
 ~15.6ms. This reduces timer jitter and can improve animation smoothness, but
@@ -221,6 +235,8 @@ If you want to ship a theme file with your app, prefer `[embeds].theme` over set
 `theme = "..."` here.
 If you want to bundle shaders with your app, prefer `[embeds].shaders` over setting
 `custom-shader` here.
+If you set `command` here, do not also set per-platform `args`; Trolley treats
+`[ghostty].command` as an explicit override.
 
 ```toml
 [ghostty]
