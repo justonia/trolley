@@ -182,11 +182,14 @@ families = [
 env_file = ".env"
 variables = { MY_VAR = "value" }
 inject_pid_variable = "TROLLEY_PID"
+pid_file = "/tmp/my-app.pid"
 ```
 
 `inject_pid_variable` makes the runtime's PID available to the TUI process
-under the given environment variable name. This is useful for signaling
-the runtime from the TUI (e.g. triggering a screenshot via `kill -USR1`).
+under the given environment variable name. `pid_file` writes the PID to
+the given path on startup and deletes it on exit. Both are useful for
+signaling the runtime from the TUI or external tools (e.g. triggering a
+screenshot via `kill -USR1`).
 
 ### `[embeds]` -- optional
 

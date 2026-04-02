@@ -396,6 +396,11 @@ pub struct Environment {
     /// the runtime (e.g. for screenshots).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub inject_pid_variable: Option<String>,
+    /// If set, the runtime writes its PID to this file path on startup and
+    /// deletes the file on exit. Useful for external tools that need to
+    /// signal the runtime.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pid_file: Option<String>,
 }
 
 impl Environment {
@@ -403,6 +408,7 @@ impl Environment {
         self.env_file.is_none()
             && self.variables.is_empty()
             && self.inject_pid_variable.is_none()
+            && self.pid_file.is_none()
     }
 }
 
@@ -879,6 +885,9 @@ pub struct TrolleyGuiConfig {
     /// Environment variable name for PID injection. NULL = disabled.
     /// This pointer is leaked and valid for the process lifetime.
     pub inject_pid_variable: *const c_char,
+    /// File path to write the PID to. NULL = disabled.
+    /// This pointer is leaked and valid for the process lifetime.
+    pub pid_file: *const c_char,
 }
 
 /// Load a trolley manifest and extract the window and environment configs.
@@ -942,6 +951,16 @@ pub unsafe extern "C" fn trolley_load_manifest(
             Some(name) if !name.is_empty() => {
                 let c_string = std::ffi::CString::new(name.as_str())
                     .context("inject_pid_variable contains interior null byte")?;
+                c_string.into_raw() as *const c_char
+            }
+            _ => std::ptr::null(),
+        };
+
+        // pid_file from [environment].
+        window_config.pid_file = match &manifest.environment.pid_file {
+            Some(p) if !p.is_empty() => {
+                let c_string = std::ffi::CString::new(p.as_str())
+                    .context("pid_file contains interior null byte")?;
                 c_string.into_raw() as *const c_char
             }
             _ => std::ptr::null(),

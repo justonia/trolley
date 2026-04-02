@@ -33,6 +33,7 @@ var g_window_config: trolley.TrolleyGuiConfig = .{
     .max_height = 0,
     .screenshot_path = null,
     .inject_pid_variable = null,
+    .pid_file = null,
 };
 
 // ---------------------------------------------------------------------------
@@ -365,6 +366,25 @@ fn translateMods(glfw_mods: c_int) ghostty.ghostty_input_mods_e {
 // common.common.getExeDir(), common.common.getBundledPath(), common.chdirToExeDir()
 
 // ---------------------------------------------------------------------------
+// PID file cleanup on signal (SIGTERM, SIGINT)
+// ---------------------------------------------------------------------------
+fn cleanupSignalHandler(_: c_int) callconv(.c) void {
+    if (g_window_config.pid_file) |path| {
+        std.fs.cwd().deleteFileZ(path) catch {};
+    }
+    // Re-raise with default handler to get the correct exit status.
+    const p = std.posix;
+    var sa: p.Sigaction = .{
+        .handler = .{ .handler = p.SIG.DFL },
+        .mask = p.sigemptyset(),
+        .flags = 0,
+    };
+    p.sigaction(p.SIG.TERM, &sa, null);
+    p.sigaction(p.SIG.INT, &sa, null);
+    _ = std.os.linux.raise(std.os.linux.SIG.TERM);
+}
+
+// ---------------------------------------------------------------------------
 // SIGUSR1 screenshot handler
 // ---------------------------------------------------------------------------
 /// Async-signal-safe handler: sets atomic flag and wakes the GLFW event loop.
@@ -459,10 +479,26 @@ pub fn main() !void {
     common.loadBundledEnvironment();
 
     // -- Inject runtime PID as environment variable if configured --
+    var pid_buf: [16]u8 = undefined;
+    const pid_str = std.fmt.bufPrintZ(&pid_buf, "{d}", .{std.os.linux.getpid()}) catch unreachable;
     if (g_window_config.inject_pid_variable) |varname| {
-        var pid_buf: [16]u8 = undefined;
-        const pid_str = std.fmt.bufPrintZ(&pid_buf, "{d}", .{std.os.linux.getpid()}) catch unreachable;
         _ = common.setenvZ(varname, pid_str.ptr);
+    }
+
+    // -- Write PID file if configured, and register signal handlers for cleanup --
+    if (g_window_config.pid_file) |path| {
+        if (std.fs.cwd().createFileZ(path, .{})) |file| {
+            file.writeAll(pid_str) catch {};
+            file.close();
+        } else |_| {}
+
+        var sa: std.posix.Sigaction = .{
+            .handler = .{ .handler = cleanupSignalHandler },
+            .mask = std.posix.sigemptyset(),
+            .flags = 0,
+        };
+        std.posix.sigaction(std.posix.SIG.TERM, &sa, null);
+        std.posix.sigaction(std.posix.SIG.INT, &sa, null);
     }
 
     // -- Register bundled fonts (must precede ghostty_init) --
@@ -576,6 +612,11 @@ pub fn main() !void {
         ghostty.ghostty_app_tick(app);
         handlePendingScreenshot();
         glfw.glfwWaitEvents();
+    }
+
+    // Clean up PID file before exit.
+    if (g_window_config.pid_file) |path| {
+        std.fs.cwd().deleteFileZ(path) catch {};
     }
 
     // Exit immediately. Ghostty's Surface.deinit assumes the GL context

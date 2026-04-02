@@ -106,6 +106,11 @@ extern "kernel32" fn ExitProcess(
     uExitCode: u32,
 ) callconv(.winapi) noreturn;
 
+extern "kernel32" fn SetConsoleCtrlHandler(
+    HandlerRoutine: ?*const fn (u32) callconv(.winapi) BOOL,
+    Add: BOOL,
+) callconv(.winapi) BOOL;
+
 extern "opengl32" fn wglGetProcAddress(
     lpszProc: [*:0]const u8,
 ) callconv(.winapi) ?*const fn () callconv(.winapi) void;
@@ -209,7 +214,16 @@ var g_window_config: trolley.TrolleyGuiConfig = .{
     .max_height = 0,
     .screenshot_path = null,
     .inject_pid_variable = null,
+    .pid_file = null,
 };
+
+/// Console control handler: delete PID file on Ctrl+C / close / shutdown.
+fn consoleCtrlHandler(_: u32) callconv(.winapi) BOOL {
+    if (g_window_config.pid_file) |path| {
+        std.fs.cwd().deleteFileZ(path) catch {};
+    }
+    return FALSE; // Let the default handler run (terminate process).
+}
 
 /// Named event handle for screenshot trigger (NULL if screenshots not configured).
 var g_screenshot_event: ?*anyopaque = null;
@@ -875,10 +889,19 @@ pub fn main() !void {
     common.loadBundledEnvironment();
 
     // -- Inject runtime PID as environment variable if configured --
+    var pid_buf: [16]u8 = undefined;
+    const pid_str = std.fmt.bufPrintZ(&pid_buf, "{d}", .{GetCurrentProcessId()}) catch unreachable;
     if (g_window_config.inject_pid_variable) |varname| {
-        var pid_buf: [16]u8 = undefined;
-        const pid_str = std.fmt.bufPrintZ(&pid_buf, "{d}", .{GetCurrentProcessId()}) catch unreachable;
         _ = common.setenvZ(varname, pid_str.ptr);
+    }
+
+    // -- Write PID file if configured, and register cleanup handler --
+    if (g_window_config.pid_file) |path| {
+        if (std.fs.cwd().createFileZ(path, .{})) |file| {
+            file.writeAll(pid_str) catch {};
+            file.close();
+        } else |_| {}
+        _ = SetConsoleCtrlHandler(consoleCtrlHandler, TRUE);
     }
 
     // -- Register bundled fonts (must precede ghostty_init) --
@@ -1039,10 +1062,10 @@ pub fn main() !void {
         const prefix = std.unicode.utf8ToUtf16LeStringLiteral("Local\\trolley-screenshot-");
         @memcpy(name_buf[0..prefix.len], prefix);
         var pos: usize = prefix.len;
-        // Format PID as decimal digits.
+        // Format PID as decimal digits for event name.
         var tmp: [10]u8 = undefined;
-        const pid_str = std.fmt.bufPrint(&tmp, "{d}", .{pid}) catch unreachable;
-        for (pid_str) |ch| {
+        const pid_digits = std.fmt.bufPrint(&tmp, "{d}", .{pid}) catch unreachable;
+        for (pid_digits) |ch| {
             name_buf[pos] = ch;
             pos += 1;
         }
@@ -1096,6 +1119,11 @@ pub fn main() !void {
                 ghostty.ghostty_surface_screenshot(g_surface, path);
             }
         }
+    }
+
+    // Clean up PID file before exit.
+    if (g_window_config.pid_file) |path| {
+        std.fs.cwd().deleteFileZ(path) catch {};
     }
 
     ExitProcess(0);

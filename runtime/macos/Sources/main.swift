@@ -12,7 +12,8 @@ var gWindowConfig = TrolleyGuiConfig(
     initial_width: 0, initial_height: 0, resizable: -1,
     min_width: 0, min_height: 0, max_width: 0, max_height: 0,
     screenshot_path: nil,
-    inject_pid_variable: nil
+    inject_pid_variable: nil,
+    pid_file: nil
 )
 
 // ---------------------------------------------------------------------------
@@ -462,8 +463,32 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         loadBundledEnvironment()
 
         // -- Inject runtime PID as environment variable if configured --
+        let pid = ProcessInfo.processInfo.processIdentifier
+        let pidStr = "\(pid)"
         if let varname = gWindowConfig.inject_pid_variable {
-            setenv(String(cString: varname), "\(ProcessInfo.processInfo.processIdentifier)", 1)
+            setenv(String(cString: varname), pidStr, 1)
+        }
+
+        // -- Write PID file if configured, and register cleanup handlers --
+        if let pidFilePath = gWindowConfig.pid_file {
+            let path = String(cString: pidFilePath)
+            try? pidStr.write(toFile: path, atomically: true, encoding: .utf8)
+
+            // Clean up PID file on SIGTERM/SIGINT.
+            for sig: Int32 in [SIGTERM, SIGINT] {
+                let source = DispatchSource.makeSignalSource(signal: sig, queue: .main)
+                signal(sig, SIG_IGN)
+                source.setEventHandler {
+                    try? FileManager.default.removeItem(atPath: path)
+                    // Re-raise with default handler for correct exit status.
+                    signal(sig, SIG_DFL)
+                    raise(sig)
+                }
+                source.resume()
+                // Prevent deallocation by leaking the source intentionally.
+                withExtendedLifetime(source) {}
+                _ = Unmanaged.passRetained(source as AnyObject)
+            }
         }
 
         // -- Register bundled fonts --
@@ -605,3 +630,8 @@ if gWindowConfig.screenshot_path != nil {
 }
 
 app.run()
+
+// Clean up PID file on exit.
+if let pidFilePath = gWindowConfig.pid_file {
+    try? FileManager.default.removeItem(atPath: String(cString: pidFilePath))
+}
