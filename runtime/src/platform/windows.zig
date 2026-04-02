@@ -1042,10 +1042,15 @@ pub fn main() !void {
         g_pid_file_path = path;
         _ = SetConsoleCtrlHandler(consoleCtrlHandler, TRUE);
 
-        if (std.fs.cwd().createFileZ(path, .{})) |file| {
-            file.writeAll(pid_str) catch {};
-            file.close();
-        } else |_| {}
+        const file = std.fs.cwd().createFileZ(path, .{}) catch {
+            std.debug.print("trolley: failed to create PID file: {s}\n", .{path});
+            return error.PidFileCreateFailed;
+        };
+        file.writeAll(pid_str) catch {
+            std.debug.print("trolley: failed to write PID file: {s}\n", .{path});
+            return error.PidFileWriteFailed;
+        };
+        file.close();
     }
 
     // -- Event loop --

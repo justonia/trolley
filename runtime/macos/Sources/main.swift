@@ -594,7 +594,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 _ = Unmanaged.passRetained(source as AnyObject)
             }
 
-            try? pidStr.write(toFile: path, atomically: true, encoding: .utf8)
+            do {
+                try pidStr.write(toFile: path, atomically: true, encoding: .utf8)
+            } catch {
+                fputs("trolley: failed to write PID file \(path): \(error)\n", stderr)
+                exit(1)
+            }
         }
     }
 

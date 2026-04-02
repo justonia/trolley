@@ -576,10 +576,15 @@ pub fn main() !void {
         std.posix.sigaction(std.posix.SIG.TERM, &sa, null);
         std.posix.sigaction(std.posix.SIG.INT, &sa, null);
 
-        if (std.fs.cwd().createFileZ(path, .{})) |file| {
-            file.writeAll(pid_str) catch {};
-            file.close();
-        } else |_| {}
+        const file = std.fs.cwd().createFileZ(path, .{}) catch {
+            std.debug.print("trolley: failed to create PID file: {s}\n", .{path});
+            return error.PidFileCreateFailed;
+        };
+        file.writeAll(pid_str) catch {
+            std.debug.print("trolley: failed to write PID file: {s}\n", .{path});
+            return error.PidFileWriteFailed;
+        };
+        file.close();
     }
 
     // -- Event loop --
