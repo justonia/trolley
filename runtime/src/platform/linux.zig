@@ -1,5 +1,6 @@
 const std = @import("std");
 const common = @import("common");
+const command = @import("command");
 const ghostty = @cImport(@cInclude("ghostty.h"));
 const glfw = @cImport({
     @cDefine("GLFW_INCLUDE_NONE", {});
@@ -20,7 +21,13 @@ var g_surface: ghostty.ghostty_surface_t = null;
 var g_app: ghostty.ghostty_app_t = null;
 
 /// Set by the SIGUSR1 signal handler; checked in the main loop.
-var g_screenshot_requested: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+var g_command_requested: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+
+/// Command queue for processing command file instructions.
+var g_command_queue: command.CommandQueue = command.CommandQueue.init(std.heap.page_allocator);
+
+/// Resolved command file path (from env or config).
+var g_command_file_path: ?[*:0]const u8 = null;
 
 // Window config from trolley manifest
 var g_window_config: trolley.TrolleyGuiConfig = .{
@@ -37,6 +44,7 @@ var g_window_config: trolley.TrolleyGuiConfig = .{
     .pid_file = null,
     .text_dump_path = null,
     .text_dump_format = 0,
+    .command_file = null,
 };
 
 // ---------------------------------------------------------------------------
@@ -388,45 +396,70 @@ fn cleanupSignalHandler(_: c_int) callconv(.c) void {
 }
 
 // ---------------------------------------------------------------------------
-// SIGUSR1 screenshot handler
+// SIGUSR1 command file handler
 // ---------------------------------------------------------------------------
 /// Async-signal-safe handler: sets atomic flag and wakes the GLFW event loop.
-fn screenshotSignalHandler(_: c_int) callconv(.c) void {
-    g_screenshot_requested.store(true, .release);
+fn commandSignalHandler(_: c_int) callconv(.c) void {
+    g_command_requested.store(true, .release);
     glfw.glfwPostEmptyEvent();
 }
 
-fn handlePendingScreenshot() void {
-    if (!g_screenshot_requested.swap(false, .acq_rel)) return;
-    const surface = g_surface orelse return;
-    const path = g_window_config.screenshot_path orelse return;
-    ghostty.ghostty_surface_screenshot(surface, path);
+/// Load commands from the command file when the signal fires.
+fn handlePendingCommandLoad() void {
+    if (!g_command_requested.swap(false, .acq_rel)) return;
+    const path = g_command_file_path orelse return;
+    g_command_queue.loadFromFile(path) catch {};
 }
 
-// ---------------------------------------------------------------------------
-// SIGUSR2 text dump handler
-// ---------------------------------------------------------------------------
-var g_text_dump_requested: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
-
-fn textDumpSignalHandler(_: c_int) callconv(.c) void {
-    g_text_dump_requested.store(true, .release);
-    glfw.glfwPostEmptyEvent();
-}
-
-fn handlePendingTextDump() void {
-    if (!g_text_dump_requested.swap(false, .acq_rel)) return;
+/// Execute ready commands from the queue.
+fn processCommandQueue() void {
     const surface = g_surface orelse return;
-    const path = g_window_config.text_dump_path orelse return;
-    var out_ptr: [*c]const u8 = null;
-    var out_len: usize = 0;
-    if (ghostty.ghostty_surface_text_dump(surface, g_window_config.text_dump_format, &out_ptr, &out_len)) {
-        defer ghostty.ghostty_surface_free_dump(out_ptr, out_len);
-        if (out_ptr) |p| {
-            if (std.fs.cwd().createFileZ(path, .{})) |file| {
-                defer file.close();
-                file.writeAll(p[0..out_len]) catch {};
-                std.debug.print("trolley: text dump saved to {s}\n", .{path});
-            } else |_| {}
+    const now = command.nowMs();
+    while (g_command_queue.tick(now)) |cmd| {
+        switch (cmd.tag) {
+            .text => {
+                ghostty.ghostty_surface_text(surface, cmd.data.ptr, cmd.data.len);
+            },
+            .key => {
+                if (command.key_map.get(cmd.data)) |seq| {
+                    ghostty.ghostty_surface_text(surface, seq.ptr, seq.len);
+                } else {
+                    std.debug.print("trolley: command: unknown key \"{s}\"\n", .{cmd.data});
+                }
+            },
+            .screenshot => {
+                if (cmd.data.len > 0) {
+                    // data is the output path (must be null-terminated)
+                    const path_z = std.heap.page_allocator.dupeZ(u8, cmd.data) catch continue;
+                    defer std.heap.page_allocator.free(path_z);
+                    ghostty.ghostty_surface_screenshot(surface, path_z.ptr);
+                } else if (g_window_config.screenshot_path) |path| {
+                    ghostty.ghostty_surface_screenshot(surface, path);
+                }
+            },
+            .text_dump => {
+                const path_z = if (cmd.data.len > 0)
+                    std.heap.page_allocator.dupeZ(u8, cmd.data) catch continue
+                else
+                    null;
+                defer if (path_z) |p| std.heap.page_allocator.free(p);
+
+                const out_path: [*c]const u8 = if (path_z) |p| p.ptr else g_window_config.text_dump_path orelse continue;
+                const format = if (cmd.format != 0) cmd.format else g_window_config.text_dump_format;
+
+                var out_ptr: [*c]const u8 = null;
+                var out_len: usize = 0;
+                if (ghostty.ghostty_surface_text_dump(surface, format, &out_ptr, &out_len)) {
+                    defer ghostty.ghostty_surface_free_dump(out_ptr, out_len);
+                    if (out_ptr) |p| {
+                        if (std.fs.cwd().createFileZ(out_path, .{})) |file| {
+                            defer file.close();
+                            file.writeAll(p[0..out_len]) catch {};
+                        } else |_| {}
+                    }
+                }
+            },
+            .wait => {}, // handled internally by CommandQueue.tick
         }
     }
 }
@@ -622,38 +655,35 @@ pub fn main() !void {
     _ = glfw.glfwSetWindowFocusCallback(window, &focusCallback);
     _ = glfw.glfwSetWindowContentScaleCallback(window, &contentScaleCallback);
 
-    // -- Register SIGUSR1 for screenshots (only if screenshot_path is configured) --
-    if (g_window_config.screenshot_path) |ss_path| {
+    // -- Resolve command file path and register SIGUSR1 --
+    g_command_file_path = command.resolveCommandFilePath(g_window_config.command_file);
+    if (g_command_file_path) |cmd_path| {
         var sa: std.posix.Sigaction = .{
-            .handler = .{ .handler = screenshotSignalHandler },
+            .handler = .{ .handler = commandSignalHandler },
             .mask = std.posix.sigemptyset(),
             .flags = std.posix.SA.RESTART,
         };
         std.posix.sigaction(std.posix.SIG.USR1, &sa, null);
-        std.debug.print("trolley: screenshot_path={s} pid={d} (send SIGUSR1 to trigger)\n", .{
-            ss_path,
+        std.debug.print("trolley: command_file={s} pid={d} (send SIGUSR1 to trigger)\n", .{
+            cmd_path,
             std.os.linux.getpid(),
         });
     } else {
-        std.debug.print("trolley: screenshot_path not configured, screenshots disabled\n", .{});
-    }
-
-    // -- Register SIGUSR2 for text dump (only if text_dump_path is configured) --
-    if (g_window_config.text_dump_path != null) {
-        var sa: std.posix.Sigaction = .{
-            .handler = .{ .handler = textDumpSignalHandler },
-            .mask = std.posix.sigemptyset(),
-            .flags = std.posix.SA.RESTART,
-        };
-        std.posix.sigaction(std.posix.SIG.USR2, &sa, null);
+        std.debug.print("trolley: command_file not configured\n", .{});
     }
 
     // -- Event loop --
     while (glfw.glfwWindowShouldClose(window) != glfw.GLFW_TRUE) {
         ghostty.ghostty_app_tick(app);
-        handlePendingScreenshot();
-        handlePendingTextDump();
-        glfw.glfwWaitEvents();
+        handlePendingCommandLoad();
+        processCommandQueue();
+        // Use a short timeout when the command queue is active (for wait timers),
+        // otherwise block until the next event.
+        if (g_command_queue.isActive()) {
+            glfw.glfwWaitEventsTimeout(0.05); // 50ms polling for wait timers
+        } else {
+            glfw.glfwWaitEvents();
+        }
     }
 
     // Clean up PID file before exit.

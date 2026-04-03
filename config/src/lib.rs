@@ -447,6 +447,8 @@ pub struct Linux {
     pub text_dump_path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text_dump_format: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command_file: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -461,6 +463,8 @@ pub struct Macos {
     pub text_dump_path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text_dump_format: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command_file: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -481,6 +485,8 @@ pub struct Windows {
     pub text_dump_path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text_dump_format: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command_file: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -976,6 +982,9 @@ pub struct TrolleyGuiConfig {
     pub text_dump_path: *const c_char,
     /// Text dump format: 0 = plain (default), 1 = vt (ANSI escape codes), 2 = html.
     pub text_dump_format: u8,
+    /// Command file path. NULL = command file disabled.
+    /// This pointer is leaked and valid for the process lifetime.
+    pub command_file: *const c_char,
 }
 
 fn windows_precise_timer_enabled(manifest: &Config) -> bool {
@@ -1103,6 +1112,27 @@ pub unsafe extern "C" fn trolley_load_manifest(
             Some("vt") => 1,
             Some("html") => 2,
             _ => 0, // plain
+        };
+
+        // command_file: env var TROLLEY_COMMAND_FILE overrides per-platform config.
+        let config_command_file: Option<&str> = if cfg!(target_os = "linux") {
+            manifest.linux.as_ref().and_then(|l| l.command_file.as_deref())
+        } else if cfg!(target_os = "macos") {
+            manifest.macos.as_ref().and_then(|m| m.command_file.as_deref())
+        } else if cfg!(target_os = "windows") {
+            manifest.windows.as_ref().and_then(|w| w.command_file.as_deref())
+        } else {
+            None
+        };
+        let env_command_file = std::env::var("TROLLEY_COMMAND_FILE").ok();
+        let command_file = env_command_file.as_deref().or(config_command_file);
+        window_config.command_file = match command_file {
+            Some(p) if !p.is_empty() => {
+                let c_string = std::ffi::CString::new(p)
+                    .context("command_file contains interior null byte")?;
+                c_string.into_raw() as *const c_char
+            }
+            _ => std::ptr::null(),
         };
 
         // Report ghostty config length so the caller can allocate.

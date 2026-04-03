@@ -178,18 +178,14 @@ binaries = { x86_64 = "path/to/app.exe" }
 precise_timer = false
 ```
 
-`screenshot_path` (optional) enables signal-triggered screenshots. When set, the
-runtime captures the rendered frame as a PNG to this path. On Linux/macOS send
-`SIGUSR1` to the process; on Windows signal the named event
-`Local\trolley-screenshot-<pid>`. The environment variable
-`TROLLEY_SCREENSHOT_PATH` overrides the config value on all platforms.
+`screenshot_path` and `text_dump_path` (optional) specify default output paths
+for screenshots and text dumps. These are used as fallbacks when the command file
+(see below) doesn't specify an explicit path.
 
-`text_dump_path` (optional) enables signal-triggered text dumps of the terminal
-screen content. On Linux/macOS send `SIGUSR2`; on Windows signal the named event
-`Local\trolley-textdump-<pid>`. `text_dump_format` selects the output format:
-`plain` (default, no styling), `vt` (ANSI escape codes), or `html` (inline CSS).
-The environment variables `TROLLEY_TEXT_DUMP_PATH` and `TROLLEY_TEXT_DUMP_FORMAT`
-override the config values.
+`command_file` (optional) enables the command file interface for programmatic
+control of the running application. See [Command File](#command-file) below.
+The environment variable `TROLLEY_COMMAND_FILE` overrides the config value on
+all platforms.
 
 ### `[gui]` -- optional
 
@@ -219,9 +215,9 @@ pid_file = "/tmp/my-app.pid"
 `inject_pid_variable` makes the runtime's PID available to the TUI process
 under the given environment variable name. `pid_file` writes the PID to
 the given path on startup and deletes it on exit. Both are useful for
-signaling the runtime from the TUI or external tools (e.g. triggering a
-screenshot via `kill -USR1`). The environment variable `TROLLEY_PID_FILE`
-overrides `pid_file`.
+signaling the runtime from the TUI or external tools (e.g. triggering
+command file processing via `kill -USR1`). The environment variable
+`TROLLEY_PID_FILE` overrides `pid_file`.
 
 ### `[embeds]` -- optional
 
@@ -316,6 +312,85 @@ to set one.
 >
 > See [Ghostty's keybind docs](https://ghostty.org/docs/config/keybind) for
 > the full list of available actions.
+
+## Command File
+
+The command file interface allows external tools (scripts, AI agents, test
+harnesses) to programmatically send input to the wrapped TUI application.
+
+### Setup
+
+Set the command file path via config or environment variable:
+
+```toml
+[linux]
+command_file = "/tmp/my-app-commands.jsonl"
+```
+
+Or at runtime:
+
+```bash
+export TROLLEY_COMMAND_FILE=/tmp/my-app-commands.jsonl
+```
+
+You'll also want `inject_pid_variable` or `pid_file` so the external tool knows
+which process to signal:
+
+```toml
+[environment]
+pid_file = "/tmp/my-app.pid"
+```
+
+### Usage
+
+1. Write one or more JSON commands to the command file (one per line).
+2. Signal the trolley process to read it:
+   - **Linux/macOS:** `kill -USR1 <pid>`
+   - **Windows:** Signal the named event `Local\trolley-command-<pid>`
+
+The file is deleted after reading, so write a fresh file before each signal.
+
+### Command types
+
+| Type | Description | Example |
+|------|-------------|---------|
+| `text` | Send text to the TUI's stdin | `{"type":"text", "data":"hello\r"}` |
+| `key` | Send a named key (mapped to escape sequence) | `{"type":"key", "data":"arrow_down"}` |
+| `wait` | Pause before the next command (seconds) | `{"type":"wait", "data":"1.5"}` |
+| `screenshot` | Capture the terminal as PNG | `{"type":"screenshot", "data":"/tmp/shot.png"}` |
+| `text_dump` | Dump terminal text content to file | `{"type":"text_dump", "data":"/tmp/dump.txt", "format":"vt"}` |
+
+For `screenshot` and `text_dump`, omitting `data` falls back to the
+`screenshot_path` / `text_dump_path` config values. The `format` field for
+`text_dump` accepts `plain` (default), `vt`, or `html`.
+
+### Available key names
+
+**Navigation:** `enter`, `tab`, `escape`, `backspace`, `space`
+
+**Arrows:** `arrow_up` / `up`, `arrow_down` / `down`, `arrow_left` / `left`, `arrow_right` / `right`
+
+**Control pad:** `home`, `end`, `page_up`, `page_down`, `insert`, `delete`
+
+**Function keys:** `f1` through `f12`
+
+**Ctrl combinations:** `ctrl+a` through `ctrl+z`
+
+### Example: automated interaction
+
+```json
+{"type":"text", "data":"search query\r"}
+{"type":"wait", "data":"2"}
+{"type":"key", "data":"arrow_down"}
+{"type":"key", "data":"arrow_down"}
+{"type":"key", "data":"enter"}
+{"type":"wait", "data":"1"}
+{"type":"screenshot", "data":"/tmp/result.png"}
+```
+
+> **Note:** Key names map to standard VT/xterm escape sequences (normal cursor
+> mode). If your TUI enables application cursor mode, arrow keys may not behave
+> as expected. Use `text` with raw escape sequences for full control.
 
 ## Icons
 

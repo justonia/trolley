@@ -1,5 +1,6 @@
 const std = @import("std");
 const common = @import("common");
+const command = @import("command");
 const win32 = @import("win32");
 const ghostty = @cImport(@cInclude("ghostty.h"));
 const trolley = @cImport(@cInclude("trolley.h"));
@@ -259,7 +260,14 @@ var g_window_config: trolley.TrolleyGuiConfig = .{
     .pid_file = null,
     .text_dump_path = null,
     .text_dump_format = 0,
+    .command_file = null,
 };
+
+/// Command queue for processing command file instructions.
+var g_command_queue: command.CommandQueue = command.CommandQueue.init(std.heap.page_allocator);
+
+/// Resolved command file path (from env or config).
+var g_command_file_path: ?[*:0]const u8 = null;
 
 fn loadBundledWindowIcon(width: i32, height: i32) ?wam.HICON {
     const path = common.getBundledPath(BUNDLED_WINDOW_ICON_FILENAME) orelse return null;
@@ -291,10 +299,8 @@ fn consoleCtrlHandler(_: u32) callconv(.winapi) BOOL {
     return FALSE; // Let the default handler run (terminate process).
 }
 
-/// Named event handle for screenshot trigger (NULL if not configured).
-var g_screenshot_event: ?*anyopaque = null;
-/// Named event handle for text dump trigger (NULL if not configured).
-var g_text_dump_event: ?*anyopaque = null;
+/// Named event handle for command file trigger (NULL if not configured).
+var g_command_event: ?*anyopaque = null;
 
 // ---------------------------------------------------------------------------
 // WGL ↔ ghostty OpenGL context bridge
@@ -930,6 +936,62 @@ fn createModernGLContext(hwnd: HWND) !struct { hdc: HDC, hglrc: HGLRC } {
 }
 
 // ---------------------------------------------------------------------------
+// Command queue execution
+// ---------------------------------------------------------------------------
+
+/// Execute ready commands from the queue.
+fn processCommandQueue() void {
+    const surface = g_surface orelse return;
+    const now = command.nowMs();
+    while (g_command_queue.tick(now)) |cmd| {
+        switch (cmd.tag) {
+            .text => {
+                ghostty.ghostty_surface_text(surface, cmd.data.ptr, cmd.data.len);
+            },
+            .key => {
+                if (command.key_map.get(cmd.data)) |seq| {
+                    ghostty.ghostty_surface_text(surface, seq.ptr, seq.len);
+                } else {
+                    std.debug.print("trolley: command: unknown key \"{s}\"\n", .{cmd.data});
+                }
+            },
+            .screenshot => {
+                if (cmd.data.len > 0) {
+                    const path_z = std.heap.page_allocator.dupeZ(u8, cmd.data) catch continue;
+                    defer std.heap.page_allocator.free(path_z);
+                    ghostty.ghostty_surface_screenshot(surface, path_z.ptr);
+                } else if (g_window_config.screenshot_path) |path| {
+                    ghostty.ghostty_surface_screenshot(surface, path);
+                }
+            },
+            .text_dump => {
+                const path_z = if (cmd.data.len > 0)
+                    std.heap.page_allocator.dupeZ(u8, cmd.data) catch continue
+                else
+                    null;
+                defer if (path_z) |p| std.heap.page_allocator.free(p);
+
+                const out_path: [*c]const u8 = if (path_z) |p| p.ptr else g_window_config.text_dump_path orelse continue;
+                const format = if (cmd.format != 0) cmd.format else g_window_config.text_dump_format;
+
+                var out_ptr: [*c]const u8 = null;
+                var out_len: usize = 0;
+                if (ghostty.ghostty_surface_text_dump(surface, format, &out_ptr, &out_len)) {
+                    defer ghostty.ghostty_surface_free_dump(out_ptr, out_len);
+                    if (out_ptr) |p| {
+                        if (std.fs.cwd().createFileZ(out_path, .{})) |file| {
+                            defer file.close();
+                            file.writeAll(p[0..out_len]) catch {};
+                        } else |_| {}
+                    }
+                }
+            },
+            .wait => {},
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 pub fn main() !void {
@@ -1129,46 +1191,12 @@ pub fn main() !void {
     // -- Show window --
     _ = wam.ShowWindow(hwnd, wam.SW_SHOW);
 
-    // -- Create named event for screenshot trigger --
-    // Event name: "Local\trolley-screenshot-<pid>"
-    // Auto-reset (bManualReset=FALSE) so the event clears after one wait.
-    if (g_window_config.screenshot_path) |ss_path| {
+    // -- Resolve command file path and create named event for trigger --
+    g_command_file_path = command.resolveCommandFilePath(g_window_config.command_file);
+    if (g_command_file_path) |cmd_path| {
         var name_buf: [64]u16 = undefined;
         const pid = GetCurrentProcessId();
-        const prefix = std.unicode.utf8ToUtf16LeStringLiteral("Local\\trolley-screenshot-");
-        @memcpy(name_buf[0..prefix.len], prefix);
-        var pos: usize = prefix.len;
-        // Format PID as decimal digits for event name.
-        var tmp: [10]u8 = undefined;
-        const pid_digits = std.fmt.bufPrint(&tmp, "{d}", .{pid}) catch unreachable;
-        for (pid_digits) |ch| {
-            name_buf[pos] = ch;
-            pos += 1;
-        }
-        name_buf[pos] = 0; // null-terminate
-        g_screenshot_event = CreateEventW(null, FALSE, FALSE, @ptrCast(&name_buf));
-
-        var event_name_utf8: [64]u8 = undefined;
-        var utf8_len: usize = 0;
-        for (name_buf[0..pos]) |wch| {
-            event_name_utf8[utf8_len] = @intCast(wch & 0x7f);
-            utf8_len += 1;
-        }
-        std.debug.print("trolley: screenshot_path={s} pid={d} event=\"{s}\" handle={?}\n", .{
-            ss_path,
-            pid,
-            event_name_utf8[0..utf8_len],
-            g_screenshot_event,
-        });
-    } else {
-        std.debug.print("trolley: screenshot_path not configured, screenshots disabled\n", .{});
-    }
-
-    // -- Create named event for text dump trigger --
-    if (g_window_config.text_dump_path != null) {
-        var name_buf: [64]u16 = undefined;
-        const pid = GetCurrentProcessId();
-        const prefix = std.unicode.utf8ToUtf16LeStringLiteral("Local\\trolley-textdump-");
+        const prefix = std.unicode.utf8ToUtf16LeStringLiteral("Local\\trolley-command-");
         @memcpy(name_buf[0..prefix.len], prefix);
         var pos: usize = prefix.len;
         var tmp: [10]u8 = undefined;
@@ -1178,20 +1206,28 @@ pub fn main() !void {
             pos += 1;
         }
         name_buf[pos] = 0;
-        g_text_dump_event = CreateEventW(null, FALSE, FALSE, @ptrCast(&name_buf));
+        g_command_event = CreateEventW(null, FALSE, FALSE, @ptrCast(&name_buf));
+
+        var event_name_utf8: [64]u8 = undefined;
+        var utf8_len: usize = 0;
+        for (name_buf[0..pos]) |wch| {
+            event_name_utf8[utf8_len] = @intCast(wch & 0x7f);
+            utf8_len += 1;
+        }
+        std.debug.print("trolley: command_file={s} pid={d} event=\"{s}\" handle={?}\n", .{
+            cmd_path,
+            pid,
+            event_name_utf8[0..utf8_len],
+            g_command_event,
+        });
+    } else {
+        std.debug.print("trolley: command_file not configured\n", .{});
     }
 
     // -- Event loop --
-    // Build handles array from configured events.
-    var wait_handles: [2]?*anyopaque = .{ null, null };
+    var wait_handles: [1]?*anyopaque = .{null};
     var wait_count: u32 = 0;
-    const screenshot_wait_idx: ?u32 = if (g_screenshot_event) |h| blk: {
-        wait_handles[wait_count] = h;
-        const idx = wait_count;
-        wait_count += 1;
-        break :blk idx;
-    } else null;
-    const text_dump_wait_idx: ?u32 = if (g_text_dump_event) |h| blk: {
+    const command_wait_idx: ?u32 = if (g_command_event) |h| blk: {
         wait_handles[wait_count] = h;
         const idx = wait_count;
         wait_count += 1;
@@ -1209,37 +1245,23 @@ pub fn main() !void {
         if (msg.message == wam.WM_QUIT) break;
 
         ghostty.ghostty_app_tick(g_app);
+        processCommandQueue();
 
-        // Wait for next message, events, or timeout (~16ms for 60fps)
+        // Use shorter timeout when command queue is active (for wait timers).
+        const timeout: u32 = if (g_command_queue.isActive()) 50 else 16;
+
         const wait_result = MsgWaitForMultipleObjects(
             wait_count,
             if (wait_count > 0) @as(?*const ?*anyopaque, @ptrCast(&wait_handles)) else null,
             FALSE,
-            16,
+            timeout,
             QS_ALLINPUT,
         );
 
-        if (screenshot_wait_idx) |idx| {
+        if (command_wait_idx) |idx| {
             if (wait_result == WAIT_OBJECT_0 + idx) {
-                if (g_window_config.screenshot_path) |path| {
-                    ghostty.ghostty_surface_screenshot(g_surface, path);
-                }
-            }
-        }
-        if (text_dump_wait_idx) |idx| {
-            if (wait_result == WAIT_OBJECT_0 + idx) {
-                if (g_window_config.text_dump_path) |path| {
-                    var out_ptr: [*c]const u8 = null;
-                    var out_len: usize = 0;
-                    if (ghostty.ghostty_surface_text_dump(g_surface, g_window_config.text_dump_format, &out_ptr, &out_len)) {
-                        defer ghostty.ghostty_surface_free_dump(out_ptr, out_len);
-                        if (out_ptr) |p| {
-                            if (std.fs.cwd().createFileZ(path, .{})) |file| {
-                                defer file.close();
-                                file.writeAll(p[0..out_len]) catch {};
-                            } else |_| {}
-                        }
-                    }
+                if (g_command_file_path) |path| {
+                    g_command_queue.loadFromFile(path) catch {};
                 }
             }
         }

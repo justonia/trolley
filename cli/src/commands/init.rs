@@ -46,6 +46,7 @@ pub fn run(path: Option<String>) -> Result<()> {
         screenshot_path: None,
         text_dump_path: None,
         text_dump_format: None,
+        command_file: None,
     });
     let macos = Some(Macos {
         binaries: all_arches.clone(),
@@ -53,6 +54,7 @@ pub fn run(path: Option<String>) -> Result<()> {
         screenshot_path: None,
         text_dump_path: None,
         text_dump_format: None,
+        command_file: None,
     });
     let windows = Some(Windows {
         binaries: all_arches,
@@ -61,6 +63,7 @@ pub fn run(path: Option<String>) -> Result<()> {
         screenshot_path: None,
         text_dump_path: None,
         text_dump_format: None,
+        command_file: None,
     });
 
     let manifest = Config {

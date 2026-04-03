@@ -248,6 +248,12 @@ pub fn build(b: *std.Build) !void {
         .optimize = optimize,
     }));
 
+    exe_mod.addImport("command", b.createModule(.{
+        .root_source_file = b.path("src/command.zig"),
+        .target = target,
+        .optimize = optimize,
+    }));
+
     exe_mod.addIncludePath(ghostty_dep.path("include"));
     exe_mod.linkLibrary(ghostty_lib);
 

@@ -16,7 +16,8 @@ var gWindowConfig = TrolleyGuiConfig(
     inject_pid_variable: nil,
     pid_file: nil,
     text_dump_path: nil,
-    text_dump_format: 0
+    text_dump_format: 0,
+    command_file: nil
 )
 
 // ---------------------------------------------------------------------------
@@ -447,6 +448,164 @@ class TrolleyView: NSView, NSTextInputClient {
 }
 
 // ---------------------------------------------------------------------------
+// Command file support
+// ---------------------------------------------------------------------------
+
+/// Key name to escape sequence map (VT/xterm normal cursor mode).
+let commandKeyMap: [String: String] = [
+    "enter": "\r",
+    "tab": "\t",
+    "escape": "\u{1b}",
+    "backspace": "\u{7f}",
+    "space": " ",
+    "arrow_up": "\u{1b}[A", "up": "\u{1b}[A",
+    "arrow_down": "\u{1b}[B", "down": "\u{1b}[B",
+    "arrow_right": "\u{1b}[C", "right": "\u{1b}[C",
+    "arrow_left": "\u{1b}[D", "left": "\u{1b}[D",
+    "home": "\u{1b}[H",
+    "end": "\u{1b}[F",
+    "page_up": "\u{1b}[5~",
+    "page_down": "\u{1b}[6~",
+    "insert": "\u{1b}[2~",
+    "delete": "\u{1b}[3~",
+    "f1": "\u{1b}OP", "f2": "\u{1b}OQ", "f3": "\u{1b}OR", "f4": "\u{1b}OS",
+    "f5": "\u{1b}[15~", "f6": "\u{1b}[17~", "f7": "\u{1b}[18~", "f8": "\u{1b}[19~",
+    "f9": "\u{1b}[20~", "f10": "\u{1b}[21~", "f11": "\u{1b}[23~", "f12": "\u{1b}[24~",
+    "ctrl+a": "\u{01}", "ctrl+b": "\u{02}", "ctrl+c": "\u{03}", "ctrl+d": "\u{04}",
+    "ctrl+e": "\u{05}", "ctrl+f": "\u{06}", "ctrl+g": "\u{07}", "ctrl+h": "\u{08}",
+    "ctrl+k": "\u{0b}", "ctrl+l": "\u{0c}", "ctrl+n": "\u{0e}", "ctrl+o": "\u{0f}",
+    "ctrl+p": "\u{10}", "ctrl+q": "\u{11}", "ctrl+r": "\u{12}", "ctrl+s": "\u{13}",
+    "ctrl+t": "\u{14}", "ctrl+u": "\u{15}", "ctrl+v": "\u{16}", "ctrl+w": "\u{17}",
+    "ctrl+x": "\u{18}", "ctrl+y": "\u{19}", "ctrl+z": "\u{1a}",
+]
+
+struct TrolleyCommand {
+    enum Tag { case text, key, wait, screenshot, textDump }
+    let tag: Tag
+    let data: String
+    let format: UInt8  // for text_dump: 0=plain, 1=vt, 2=html
+}
+
+/// Parse a single JSON line into a TrolleyCommand.
+func parseCommandLine(_ line: String) -> TrolleyCommand? {
+    guard let jsonData = line.data(using: .utf8),
+          let obj = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
+          let typeStr = obj["type"] as? String else { return nil }
+    let data = obj["data"] as? String ?? ""
+    let tag: TrolleyCommand.Tag
+    switch typeStr {
+    case "text": tag = .text
+    case "key": tag = .key
+    case "wait": tag = .wait
+    case "screenshot": tag = .screenshot
+    case "text_dump": tag = .textDump
+    default:
+        fputs("trolley: command: unknown type \"\(typeStr)\"\n", stderr)
+        return nil
+    }
+    var format: UInt8 = 0
+    if tag == .textDump, let fmtStr = obj["format"] as? String {
+        switch fmtStr {
+        case "vt": format = 1
+        case "html": format = 2
+        default: format = 0
+        }
+    }
+    return TrolleyCommand(tag: tag, data: data, format: format)
+}
+
+/// Load and execute commands from the command file.
+/// Waits are handled via recursive DispatchQueue.main.asyncAfter.
+func loadAndExecuteCommandFile(path: String) {
+    guard let contents = try? String(contentsOfFile: path, encoding: .utf8) else { return }
+    // Delete the file so the sender can write a fresh one.
+    try? FileManager.default.removeItem(atPath: path)
+
+    let lines = contents.split(separator: "\n", omittingEmptySubsequences: true)
+    var commands: [TrolleyCommand] = []
+    for line in lines {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        if trimmed.isEmpty { continue }
+        if let cmd = parseCommandLine(trimmed) {
+            commands.append(cmd)
+        }
+    }
+    executeCommands(commands, index: 0)
+}
+
+/// Execute commands sequentially, deferring on wait commands.
+func executeCommands(_ commands: [TrolleyCommand], index: Int) {
+    guard index < commands.count else { return }
+    let cmd = commands[index]
+
+    if cmd.tag == .wait {
+        let seconds = Double(cmd.data) ?? 1.0
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds) {
+            executeCommands(commands, index: index + 1)
+        }
+        return
+    }
+
+    executeSingleCommand(cmd)
+    // Continue to next command immediately.
+    if index + 1 < commands.count {
+        executeCommands(commands, index: index + 1)
+    }
+}
+
+func executeSingleCommand(_ cmd: TrolleyCommand) {
+    guard let surface = gSurface else { return }
+    switch cmd.tag {
+    case .text:
+        cmd.data.withCString { ptr in
+            ghostty_surface_text(surface, ptr, cmd.data.utf8.count)
+        }
+    case .key:
+        guard let seq = commandKeyMap[cmd.data] else {
+            fputs("trolley: command: unknown key \"\(cmd.data)\"\n", stderr)
+            return
+        }
+        seq.withCString { ptr in
+            ghostty_surface_text(surface, ptr, seq.utf8.count)
+        }
+    case .screenshot:
+        if !cmd.data.isEmpty {
+            cmd.data.withCString { ptr in
+                ghostty_surface_screenshot(surface, ptr)
+            }
+        } else if let path = gWindowConfig.screenshot_path {
+            ghostty_surface_screenshot(surface, path)
+        }
+    case .textDump:
+        let outPath: UnsafePointer<CChar>
+        var allocatedPath: UnsafeMutablePointer<CChar>? = nil
+        if !cmd.data.isEmpty {
+            allocatedPath = strdup(cmd.data)
+            outPath = UnsafePointer(allocatedPath!)
+        } else if let path = gWindowConfig.text_dump_path {
+            outPath = path
+        } else {
+            return
+        }
+        defer { allocatedPath.map { free($0) } }
+
+        let format = cmd.format != 0 ? cmd.format : gWindowConfig.text_dump_format
+        var outPtr: UnsafePointer<UInt8>?
+        var outLen: Int = 0
+        if ghostty_surface_text_dump(surface, format, &outPtr, &outLen) {
+            if let ptr = outPtr {
+                defer { ghostty_surface_free_dump(ptr, outLen) }
+                let data = Data(bytes: ptr, count: outLen)
+                let pathStr = String(cString: outPath)
+                try? data.write(to: URL(fileURLWithPath: pathStr))
+            }
+        }
+    case .wait:
+        break // handled by executeCommands
+    }
+}
+
+// ---------------------------------------------------------------------------
 // AppDelegate
 // ---------------------------------------------------------------------------
 class AppDelegate: NSObject, NSApplicationDelegate {
@@ -618,41 +777,30 @@ let app = NSApplication.shared
 app.setActivationPolicy(.regular)
 app.delegate = delegate
 
-// Register SIGUSR1 for screenshots (only if screenshot_path is configured).
-var screenshotSignalSource: DispatchSourceSignal?
-if gWindowConfig.screenshot_path != nil {
+// Resolve command file path: TROLLEY_COMMAND_FILE env var overrides config.
+let commandFilePath: String? = {
+    if let envPath = ProcessInfo.processInfo.environment["TROLLEY_COMMAND_FILE"], !envPath.isEmpty {
+        return envPath
+    }
+    if let configPath = gWindowConfig.command_file {
+        return String(cString: configPath)
+    }
+    return nil
+}()
+
+// Register SIGUSR1 for command file processing.
+var commandSignalSource: DispatchSourceSignal?
+if let cmdPath = commandFilePath {
     signal(SIGUSR1, SIG_IGN)
     let source = DispatchSource.makeSignalSource(signal: SIGUSR1, queue: .main)
     source.setEventHandler {
-        guard let surface = gSurface,
-              let path = gWindowConfig.screenshot_path else { return }
-        ghostty_surface_screenshot(surface, path)
+        loadAndExecuteCommandFile(path: cmdPath)
     }
     source.resume()
-    screenshotSignalSource = source  // prevent deallocation
-}
-
-// Register SIGUSR2 for text dump (only if text_dump_path is configured).
-var textDumpSignalSource: DispatchSourceSignal?
-if gWindowConfig.text_dump_path != nil {
-    signal(SIGUSR2, SIG_IGN)
-    let source = DispatchSource.makeSignalSource(signal: SIGUSR2, queue: .main)
-    source.setEventHandler {
-        guard let surface = gSurface,
-              let path = gWindowConfig.text_dump_path else { return }
-        var outPtr: UnsafePointer<UInt8>?
-        var outLen: Int = 0
-        if ghostty_surface_text_dump(surface, gWindowConfig.text_dump_format, &outPtr, &outLen) {
-            if let ptr = outPtr {
-                defer { ghostty_surface_free_dump(ptr, outLen) }
-                let data = Data(bytes: ptr, count: outLen)
-                let pathStr = String(cString: path)
-                try? data.write(to: URL(fileURLWithPath: pathStr))
-            }
-        }
-    }
-    source.resume()
-    textDumpSignalSource = source
+    commandSignalSource = source  // prevent deallocation
+    fputs("trolley: command_file=\(cmdPath) pid=\(ProcessInfo.processInfo.processIdentifier) (send SIGUSR1 to trigger)\n", stderr)
+} else {
+    fputs("trolley: command_file not configured\n", stderr)
 }
 
 app.run()
