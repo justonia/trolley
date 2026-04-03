@@ -549,7 +549,34 @@ func loadAndExecuteCommandFile(path: String) {
     executeCommands(commands, index: 0)
 }
 
-/// Execute commands sequentially, deferring on wait commands.
+/// Maximum time (seconds) to wait for a screenshot file to appear.
+let screenshotTimeoutSeconds: Double = 2.0
+
+/// Check if a file exists with size > 0.
+func fileExistsWithSize(_ path: String) -> Bool {
+    guard let attrs = try? FileManager.default.attributesOfItem(atPath: path),
+          let size = attrs[.size] as? UInt64 else { return false }
+    return size > 0
+}
+
+/// Poll for a screenshot file, then continue executing commands.
+func waitForScreenshot(path: String, deadline: Date, commands: [TrolleyCommand], index: Int) {
+    if fileExistsWithSize(path) {
+        fputs("trolley: command: screenshot ready \(path)\n", stderr)
+        executeCommands(commands, index: index)
+        return
+    }
+    if Date() >= deadline {
+        fputs("trolley: command: screenshot timed out, aborting\n", stderr)
+        exit(1)
+    }
+    // Poll again in 50ms.
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+        waitForScreenshot(path: path, deadline: deadline, commands: commands, index: index)
+    }
+}
+
+/// Execute commands sequentially, deferring on wait and screenshot commands.
 func executeCommands(_ commands: [TrolleyCommand], index: Int) {
     guard index < commands.count else { return }
     let cmd = commands[index]
@@ -563,6 +590,26 @@ func executeCommands(_ commands: [TrolleyCommand], index: Int) {
     }
 
     executeSingleCommand(cmd)
+
+    // If it was a screenshot, wait for the file before continuing.
+    if cmd.tag == .screenshot {
+        let path: String
+        if !cmd.data.isEmpty {
+            path = cmd.data
+        } else if let configPath = gWindowConfig.screenshot_path {
+            path = String(cString: configPath)
+        } else {
+            // No path — can't wait, just continue.
+            if index + 1 < commands.count {
+                executeCommands(commands, index: index + 1)
+            }
+            return
+        }
+        let deadline = Date().addingTimeInterval(screenshotTimeoutSeconds)
+        waitForScreenshot(path: path, deadline: deadline, commands: commands, index: index + 1)
+        return
+    }
+
     // Continue to next command immediately.
     if index + 1 < commands.count {
         executeCommands(commands, index: index + 1)
@@ -589,7 +636,11 @@ func executeSingleCommand(_ cmd: TrolleyCommand) {
             ghostty_surface_write_pty(surface, ptr, seq.utf8.count)
         }
     case .screenshot:
-        fputs("trolley: command: screenshot \"\(cmd.data)\" (cursor=\(modeStr))\n", stderr)
+        let screenshotPath: String = !cmd.data.isEmpty ? cmd.data :
+            (gWindowConfig.screenshot_path.map { String(cString: $0) } ?? "")
+        // Delete existing file so we can detect the new one.
+        try? FileManager.default.removeItem(atPath: screenshotPath)
+        fputs("trolley: command: screenshot \"\(screenshotPath)\" (cursor=\(modeStr)) waiting...\n", stderr)
         if !cmd.data.isEmpty {
             cmd.data.withCString { ptr in
                 ghostty_surface_screenshot(surface, ptr)

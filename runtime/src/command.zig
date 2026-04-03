@@ -21,11 +21,21 @@ pub const Command = struct {
 
 /// Queue of commands loaded from a command file.
 /// Supports sequential execution with wait timers between commands.
+/// State for waiting on a screenshot file to appear on disk.
+pub const PendingScreenshot = struct {
+    /// Null-terminated path to poll for.
+    path: [*:0]const u8,
+    /// Monotonic deadline (ms) — if exceeded, the screenshot is considered failed.
+    deadline_ms: i64,
+};
+
 pub const CommandQueue = struct {
     commands: std.ArrayListUnmanaged(Command) = .empty,
     current: usize = 0,
     /// Monotonic deadline (ms) for the current wait command, or null if not waiting.
     wait_deadline_ms: ?i64 = null,
+    /// When set, the queue blocks until this screenshot file exists with size > 0.
+    pending_screenshot: ?PendingScreenshot = null,
     arena: std.heap.ArenaAllocator,
 
     pub fn init(allocator: std.mem.Allocator) CommandQueue {
@@ -41,6 +51,7 @@ pub const CommandQueue = struct {
         self.commands = .empty;
         self.current = 0;
         self.wait_deadline_ms = null;
+        self.pending_screenshot = null;
         _ = self.arena.reset(.retain_capacity);
     }
 
@@ -78,10 +89,20 @@ pub const CommandQueue = struct {
     }
 
     /// Get the next command to execute given the current monotonic time (ms).
-    /// Returns null if the queue is exhausted or a wait is still active.
-    /// Wait commands are consumed internally — they are never returned.
+    /// Returns null if the queue is exhausted, a wait is active, or a
+    /// screenshot is pending. Wait commands are consumed internally.
     pub fn tick(self: *CommandQueue, now_ms: i64) ?Command {
         while (true) {
+            // Block while a screenshot is pending.
+            if (self.pending_screenshot) |ps| {
+                if (fileExistsWithSize(ps.path)) {
+                    std.debug.print("trolley: command: screenshot ready {s}\n", .{ps.path});
+                    self.pending_screenshot = null;
+                } else {
+                    return null; // still waiting — caller checks screenshotTimedOut()
+                }
+            }
+
             // Check if a wait is active.
             if (self.wait_deadline_ms) |deadline| {
                 if (now_ms < deadline) return null;
@@ -105,9 +126,27 @@ pub const CommandQueue = struct {
         }
     }
 
-    /// True while there are still commands to process (including pending waits).
+    /// Set a pending screenshot that must complete before the queue continues.
+    pub fn waitForScreenshot(self: *CommandQueue, path: [*:0]const u8, now_ms: i64) void {
+        self.pending_screenshot = .{
+            .path = path,
+            .deadline_ms = now_ms + screenshot_timeout_ms,
+        };
+    }
+
+    /// Returns true if a pending screenshot has exceeded its deadline.
+    pub fn screenshotTimedOut(self: *const CommandQueue, now_ms: i64) bool {
+        if (self.pending_screenshot) |ps| {
+            return now_ms >= ps.deadline_ms;
+        }
+        return false;
+    }
+
+    /// True while there are still commands to process (including pending waits/screenshots).
     pub fn isActive(self: *const CommandQueue) bool {
-        return self.current < self.commands.items.len or self.wait_deadline_ms != null;
+        return self.current < self.commands.items.len or
+            self.wait_deadline_ms != null or
+            self.pending_screenshot != null;
     }
 };
 
@@ -206,6 +245,21 @@ pub fn resolveKey(name: []const u8, app_cursor: bool) ?[]const u8 {
         if (app_cursor_overrides.get(name)) |seq| return seq;
     }
     return key_map.get(name);
+}
+
+// ---------------------------------------------------------------------------
+// Screenshot wait support
+// ---------------------------------------------------------------------------
+
+/// Maximum time (ms) to wait for a screenshot file to appear on disk.
+const screenshot_timeout_ms: i64 = 2000;
+
+/// Check if a file exists and has size > 0.
+fn fileExistsWithSize(path: [*:0]const u8) bool {
+    const file = std.fs.cwd().openFileZ(path, .{}) catch return false;
+    defer file.close();
+    const stat = file.stat() catch return false;
+    return stat.size > 0;
 }
 
 /// Parse the "format" field of a text_dump command into the u8 enum.

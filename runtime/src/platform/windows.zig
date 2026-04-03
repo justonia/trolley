@@ -942,9 +942,16 @@ fn createModernGLContext(hwnd: HWND) !struct { hdc: HDC, hglrc: HGLRC } {
 /// Execute ready commands from the queue.
 fn processCommandQueue() void {
     const surface = g_surface orelse return;
+    const now = command.nowMs();
+
+    // Check for screenshot timeout before processing commands.
+    if (g_command_queue.screenshotTimedOut(now)) {
+        std.debug.print("trolley: command: screenshot timed out, aborting\n", .{});
+        ExitProcess(1);
+    }
+
     const app_cursor = ghostty.ghostty_surface_cursor_key_mode(surface);
     const mode_str: []const u8 = if (app_cursor) "app" else "normal";
-    const now = command.nowMs();
     while (g_command_queue.tick(now)) |cmd| {
         switch (cmd.tag) {
             .text => {
@@ -960,14 +967,15 @@ fn processCommandQueue() void {
                 }
             },
             .screenshot => {
-                std.debug.print("trolley: command: screenshot \"{s}\" (cursor={s})\n", .{ cmd.data, mode_str });
-                if (cmd.data.len > 0) {
-                    const path_z = std.heap.page_allocator.dupeZ(u8, cmd.data) catch continue;
-                    defer std.heap.page_allocator.free(path_z);
-                    ghostty.ghostty_surface_screenshot(surface, path_z.ptr);
-                } else if (g_window_config.screenshot_path) |path| {
-                    ghostty.ghostty_surface_screenshot(surface, path);
-                }
+                const path_z: [*:0]const u8 = if (cmd.data.len > 0)
+                    (std.heap.page_allocator.dupeZ(u8, cmd.data) catch continue).ptr
+                else
+                    (g_window_config.screenshot_path orelse continue);
+                std.fs.cwd().deleteFileZ(path_z) catch {};
+                std.debug.print("trolley: command: screenshot \"{s}\" (cursor={s}) waiting...\n", .{ path_z, mode_str });
+                ghostty.ghostty_surface_screenshot(surface, path_z);
+                g_command_queue.waitForScreenshot(path_z, now);
+                return;
             },
             .text_dump => {
                 std.debug.print("trolley: command: text_dump \"{s}\" format={d} (cursor={s})\n", .{ cmd.data, cmd.format, mode_str });
