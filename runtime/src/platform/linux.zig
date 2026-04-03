@@ -384,7 +384,7 @@ fn cleanupSignalHandler(_: c_int) callconv(.c) void {
     };
     p.sigaction(p.SIG.TERM, &sa, null);
     p.sigaction(p.SIG.INT, &sa, null);
-    _ = std.os.linux.raise(std.os.linux.SIG.TERM);
+    _ = std.os.linux.kill(std.os.linux.getpid(), std.os.linux.SIG.TERM);
 }
 
 // ---------------------------------------------------------------------------
