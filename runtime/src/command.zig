@@ -125,7 +125,7 @@ pub const key_map = std.StaticStringMap([]const u8).initComptime(.{
     .{ "backspace", "\x7f" },
     .{ "space", " " },
 
-    // Arrow keys (normal mode)
+    // Arrow keys (normal mode — CSI sequences)
     .{ "arrow_up", "\x1b[A" },
     .{ "arrow_down", "\x1b[B" },
     .{ "arrow_right", "\x1b[C" },
@@ -182,6 +182,31 @@ pub const key_map = std.StaticStringMap([]const u8).initComptime(.{
     .{ "ctrl+y", "\x19" },
     .{ "ctrl+z", "\x1a" },
 });
+
+/// Keys that change when DECCKM (application cursor key mode) is active.
+/// Only arrow keys and home/end are affected — they send SS3 instead of CSI.
+const app_cursor_overrides = std.StaticStringMap([]const u8).initComptime(.{
+    .{ "arrow_up", "\x1bOA" },
+    .{ "arrow_down", "\x1bOB" },
+    .{ "arrow_right", "\x1bOC" },
+    .{ "arrow_left", "\x1bOD" },
+    .{ "up", "\x1bOA" },
+    .{ "down", "\x1bOB" },
+    .{ "right", "\x1bOC" },
+    .{ "left", "\x1bOD" },
+    .{ "home", "\x1bOH" },
+    .{ "end", "\x1bOF" },
+});
+
+/// Look up the escape sequence for a key name, respecting application cursor
+/// key mode (DECCKM). When `app_cursor` is true and the key has an override,
+/// the SS3 variant is returned; otherwise falls back to the normal CSI map.
+pub fn resolveKey(name: []const u8, app_cursor: bool) ?[]const u8 {
+    if (app_cursor) {
+        if (app_cursor_overrides.get(name)) |seq| return seq;
+    }
+    return key_map.get(name);
+}
 
 /// Parse the "format" field of a text_dump command into the u8 enum.
 fn parseTextDumpFormat(fmt_str: []const u8) u8 {

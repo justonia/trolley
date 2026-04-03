@@ -414,22 +414,26 @@ fn handlePendingCommandLoad() void {
 /// Execute ready commands from the queue.
 fn processCommandQueue() void {
     const surface = g_surface orelse return;
+    const app_cursor = ghostty.ghostty_surface_cursor_key_mode(surface);
+    const mode_str: []const u8 = if (app_cursor) "app" else "normal";
     const now = command.nowMs();
     while (g_command_queue.tick(now)) |cmd| {
         switch (cmd.tag) {
             .text => {
-                ghostty.ghostty_surface_text(surface, cmd.data.ptr, cmd.data.len);
+                std.debug.print("trolley: command: text \"{s}\" (cursor={s})\n", .{ cmd.data, mode_str });
+                ghostty.ghostty_surface_write_pty(surface, cmd.data.ptr, cmd.data.len);
             },
             .key => {
-                if (command.key_map.get(cmd.data)) |seq| {
-                    ghostty.ghostty_surface_text(surface, seq.ptr, seq.len);
+                if (command.resolveKey(cmd.data, app_cursor)) |seq| {
+                    std.debug.print("trolley: command: key \"{s}\" -> {d} bytes (cursor={s})\n", .{ cmd.data, seq.len, mode_str });
+                    ghostty.ghostty_surface_write_pty(surface, seq.ptr, seq.len);
                 } else {
-                    std.debug.print("trolley: command: unknown key \"{s}\"\n", .{cmd.data});
+                    std.debug.print("trolley: command: unknown key \"{s}\" (cursor={s})\n", .{ cmd.data, mode_str });
                 }
             },
             .screenshot => {
+                std.debug.print("trolley: command: screenshot \"{s}\" (cursor={s})\n", .{ cmd.data, mode_str });
                 if (cmd.data.len > 0) {
-                    // data is the output path (must be null-terminated)
                     const path_z = std.heap.page_allocator.dupeZ(u8, cmd.data) catch continue;
                     defer std.heap.page_allocator.free(path_z);
                     ghostty.ghostty_surface_screenshot(surface, path_z.ptr);
@@ -438,6 +442,7 @@ fn processCommandQueue() void {
                 }
             },
             .text_dump => {
+                std.debug.print("trolley: command: text_dump \"{s}\" format={d} (cursor={s})\n", .{ cmd.data, cmd.format, mode_str });
                 const path_z = if (cmd.data.len > 0)
                     std.heap.page_allocator.dupeZ(u8, cmd.data) catch continue
                 else

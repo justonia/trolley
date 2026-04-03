@@ -479,6 +479,22 @@ let commandKeyMap: [String: String] = [
     "ctrl+x": "\u{18}", "ctrl+y": "\u{19}", "ctrl+z": "\u{1a}",
 ]
 
+/// Keys that change under DECCKM (application cursor key mode).
+let commandAppCursorOverrides: [String: String] = [
+    "arrow_up": "\u{1b}OA", "up": "\u{1b}OA",
+    "arrow_down": "\u{1b}OB", "down": "\u{1b}OB",
+    "arrow_right": "\u{1b}OC", "right": "\u{1b}OC",
+    "arrow_left": "\u{1b}OD", "left": "\u{1b}OD",
+    "home": "\u{1b}OH",
+    "end": "\u{1b}OF",
+]
+
+/// Resolve a key name to its escape sequence, respecting application cursor mode.
+func resolveCommandKey(_ name: String, appCursor: Bool) -> String? {
+    if appCursor, let seq = commandAppCursorOverrides[name] { return seq }
+    return commandKeyMap[name]
+}
+
 struct TrolleyCommand {
     enum Tag { case text, key, wait, screenshot, textDump }
     let tag: Tag
@@ -555,20 +571,25 @@ func executeCommands(_ commands: [TrolleyCommand], index: Int) {
 
 func executeSingleCommand(_ cmd: TrolleyCommand) {
     guard let surface = gSurface else { return }
+    let appCursor = ghostty_surface_cursor_key_mode(surface)
+    let modeStr = appCursor ? "app" : "normal"
     switch cmd.tag {
     case .text:
+        fputs("trolley: command: text \"\(cmd.data)\" (cursor=\(modeStr))\n", stderr)
         cmd.data.withCString { ptr in
-            ghostty_surface_text(surface, ptr, cmd.data.utf8.count)
+            ghostty_surface_write_pty(surface, ptr, cmd.data.utf8.count)
         }
     case .key:
-        guard let seq = commandKeyMap[cmd.data] else {
-            fputs("trolley: command: unknown key \"\(cmd.data)\"\n", stderr)
+        guard let seq = resolveCommandKey(cmd.data, appCursor: appCursor) else {
+            fputs("trolley: command: unknown key \"\(cmd.data)\" (cursor=\(modeStr))\n", stderr)
             return
         }
+        fputs("trolley: command: key \"\(cmd.data)\" -> \(seq.utf8.count) bytes (cursor=\(modeStr))\n", stderr)
         seq.withCString { ptr in
-            ghostty_surface_text(surface, ptr, seq.utf8.count)
+            ghostty_surface_write_pty(surface, ptr, seq.utf8.count)
         }
     case .screenshot:
+        fputs("trolley: command: screenshot \"\(cmd.data)\" (cursor=\(modeStr))\n", stderr)
         if !cmd.data.isEmpty {
             cmd.data.withCString { ptr in
                 ghostty_surface_screenshot(surface, ptr)
@@ -577,6 +598,7 @@ func executeSingleCommand(_ cmd: TrolleyCommand) {
             ghostty_surface_screenshot(surface, path)
         }
     case .textDump:
+        fputs("trolley: command: text_dump \"\(cmd.data)\" format=\(cmd.format) (cursor=\(modeStr))\n", stderr)
         let outPath: UnsafePointer<CChar>
         var allocatedPath: UnsafeMutablePointer<CChar>? = nil
         if !cmd.data.isEmpty {
