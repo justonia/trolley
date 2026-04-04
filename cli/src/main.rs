@@ -44,6 +44,9 @@ enum Command {
         /// Path to trolley.toml (default: ./trolley.toml)
         #[arg(long)]
         config: Option<String>,
+        /// Run with the window hidden (for automation)
+        #[arg(long)]
+        headless: bool,
     },
 }
 
@@ -68,13 +71,13 @@ fn main() -> Result<()> {
             commands::package::run(&ctx, target, &tui_binary, &runtime, bundle_only, formats, skip_failed_formats)?;
             Ok(())
         }
-        Command::Run { config } => {
+        Command::Run { config, headless } => {
             let ctx = commands::common::ProjectContext::load(config, None)?;
             let target = Target::host();
             let tui_binary =
                 commands::common::resolve_tui_binary(&ctx.project_dir, &ctx.config, &target)?;
             let runtime = commands::common::resolve_runtime(&target)?;
-            commands::run::run(ctx, tui_binary, runtime)
+            commands::run::run(ctx, tui_binary, runtime, headless)
         }
     }
 }

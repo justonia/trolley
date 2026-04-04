@@ -34,6 +34,20 @@ pub fn chdirToExeDir() void {
 }
 
 // ---------------------------------------------------------------------------
+// Command-line argument check
+// ---------------------------------------------------------------------------
+
+/// Check if a specific argument is present in the process's argv.
+pub fn hasArg(name: []const u8) bool {
+    var args = std.process.args();
+    _ = args.skip(); // skip argv[0]
+    while (args.next()) |arg| {
+        if (std.mem.eql(u8, arg, name)) return true;
+    }
+    return false;
+}
+
+// ---------------------------------------------------------------------------
 // Environment
 // ---------------------------------------------------------------------------
 

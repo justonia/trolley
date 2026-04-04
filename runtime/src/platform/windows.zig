@@ -1035,6 +1035,9 @@ pub fn main() !void {
         _ = timeBeginPeriod(1);
     }
 
+    // -- Headless mode --
+    const headless = common.hasArg("--headless");
+
     // -- Load bundled environment variables (must precede ghostty_init) --
     common.loadBundledEnvironment();
 
@@ -1203,8 +1206,10 @@ pub fn main() !void {
     ghostty.ghostty_surface_set_content_scale(surface, scale, scale);
     ghostty.ghostty_surface_set_focus(surface, true);
 
-    // -- Show window --
-    _ = wam.ShowWindow(hwnd, wam.SW_SHOW);
+    // -- Show window (skip in headless mode) --
+    if (!headless) {
+        _ = wam.ShowWindow(hwnd, wam.SW_SHOW);
+    }
 
     // -- Resolve command file path/format and create named event for trigger --
     g_command_file_path = command.resolveCommandFilePath(g_window_config.command_file);

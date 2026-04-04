@@ -858,12 +858,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         ghostty_surface_set_content_scale(surface, Double(window.backingScaleFactor), Double(window.backingScaleFactor))
         ghostty_surface_set_focus(surface, true)
 
-        // -- Show window --
-        window.makeKeyAndOrderFront(nil)
-        if #available(macOS 14.0, *) {
-            NSApp.activate()
-        } else {
-            NSApp.activate(ignoringOtherApps: true)
+        // -- Show window (skip in headless mode) --
+        let headless = CommandLine.arguments.contains("--headless")
+        if !headless {
+            window.makeKeyAndOrderFront(nil)
+            if #available(macOS 14.0, *) {
+                NSApp.activate()
+            } else {
+                NSApp.activate(ignoringOtherApps: true)
+            }
         }
     }
 

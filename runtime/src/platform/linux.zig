@@ -510,6 +510,9 @@ pub fn main() !void {
     const initial_width: c_int = if (g_window_config.initial_width > 0) @intCast(g_window_config.initial_width) else 800;
     const initial_height: c_int = if (g_window_config.initial_height > 0) @intCast(g_window_config.initial_height) else 600;
 
+    // -- Headless mode --
+    const headless = common.hasArg("--headless");
+
     // -- GLFW init --
     _ = glfw.glfwSetErrorCallback(&glfwErrorCallback);
     if (glfw.glfwInit() != glfw.GLFW_TRUE) {
@@ -522,8 +525,8 @@ pub fn main() !void {
     glfw.glfwWindowHint(glfw.GLFW_CONTEXT_VERSION_MINOR, 3);
     glfw.glfwWindowHint(glfw.GLFW_OPENGL_PROFILE, glfw.GLFW_OPENGL_CORE_PROFILE);
     glfw.glfwWindowHint(glfw.GLFW_OPENGL_FORWARD_COMPAT, glfw.GLFW_TRUE);
-    glfw.glfwWindowHint(glfw.GLFW_VISIBLE, glfw.GLFW_TRUE);
-    glfw.glfwWindowHint(glfw.GLFW_FOCUSED, glfw.GLFW_TRUE);
+    glfw.glfwWindowHint(glfw.GLFW_VISIBLE, if (headless) glfw.GLFW_FALSE else glfw.GLFW_TRUE);
+    glfw.glfwWindowHint(glfw.GLFW_FOCUSED, if (headless) glfw.GLFW_FALSE else glfw.GLFW_TRUE);
 
     // Resizable hint (must be set before window creation)
     if (g_window_config.resizable == 0) {
@@ -550,9 +553,11 @@ pub fn main() !void {
     }
 
     glfw.glfwMakeContextCurrent(window);
-    glfw.glfwSwapInterval(1);
-    glfw.glfwShowWindow(window);
-    glfw.glfwFocusWindow(window);
+    glfw.glfwSwapInterval(if (headless) @as(c_int, 0) else @as(c_int, 1));
+    if (!headless) {
+        glfw.glfwShowWindow(window);
+        glfw.glfwFocusWindow(window);
+    }
 
     // -- Load bundled environment variables (must precede ghostty_init) --
     common.loadBundledEnvironment();
