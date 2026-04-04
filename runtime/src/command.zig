@@ -233,6 +233,20 @@ pub const key_map = std.StaticStringMap([]const u8).initComptime(.{
     .{ "f11", "\x1b[23~" },
     .{ "f12", "\x1b[24~" },
 
+    // Shift + function keys
+    .{ "shift+f1", "\x1b[1;2P" },
+    .{ "shift+f2", "\x1b[1;2Q" },
+    .{ "shift+f3", "\x1b[1;2R" },
+    .{ "shift+f4", "\x1b[1;2S" },
+    .{ "shift+f5", "\x1b[15;2~" },
+    .{ "shift+f6", "\x1b[17;2~" },
+    .{ "shift+f7", "\x1b[18;2~" },
+    .{ "shift+f8", "\x1b[19;2~" },
+    .{ "shift+f9", "\x1b[20;2~" },
+    .{ "shift+f10", "\x1b[21;2~" },
+    .{ "shift+f11", "\x1b[23;2~" },
+    .{ "shift+f12", "\x1b[24;2~" },
+
     // Ctrl combinations
     .{ "ctrl+a", "\x01" },
     .{ "ctrl+b", "\x02" },
