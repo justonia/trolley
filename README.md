@@ -187,6 +187,25 @@ control of the running application. See [Command File](#command-file) below.
 The environment variable `TROLLEY_COMMAND_FILE` overrides the config value on
 all platforms.
 
+`command_format` (optional) controls how command file lines are parsed. The
+default `"jsonl"` expects each line to be a complete JSON object. Set to
+`"bare"` if lines omit the wrapping braces — Trolley will prepend `{` and
+append `}` before parsing. This avoids the `{"` character sequence which
+triggers safety filters in some LLMs. The environment variable
+`TROLLEY_COMMAND_FORMAT` overrides the config value on Linux and macOS.
+
+`stderr_passthrough` (optional, boolean) routes the child process's stderr to
+Trolley's own stderr instead of the PTY. Without this, stderr output is
+rendered into the terminal and immediately painted over by the TUI's next
+redraw. Enable this to let diagnostic output flow to the launching terminal.
+
+```toml
+[linux]
+command_file = "/tmp/my-app-commands.jsonl"
+command_format = "bare"
+stderr_passthrough = true
+```
+
 ### `[gui]` -- optional
 
 `initial_width`, `initial_height`, `resizable`, `min_width`, `min_height`,
@@ -348,7 +367,18 @@ pid_file = "/tmp/my-app.pid"
    - **Linux/macOS:** `kill -USR1 <pid>`
    - **Windows:** Signal the named event `Local\trolley-command-<pid>`
 
-The file is deleted after reading, so write a fresh file before each signal.
+#### File lifecycle
+
+When Trolley reads the command file it uses a two-phase lifecycle so the
+automation client can detect progress:
+
+1. **Truncate** — the file is truncated to zero bytes immediately after
+   reading. The file still exists, signaling "read acknowledged".
+2. **Delete** — the file is deleted once all commands (including waits and
+   screenshots) have finished executing, signaling "execution complete".
+
+The client can detect completion by watching for the file to disappear after
+it was truncated. Write a fresh file before sending the next signal.
 
 ### Command types
 
@@ -376,7 +406,7 @@ For `screenshot` and `text_dump`, omitting `data` falls back to the
 
 **Ctrl combinations:** `ctrl+a` through `ctrl+z`
 
-### Example: automated interaction
+### Example: automated interaction (JSONL format)
 
 ```json
 {"type":"text", "data":"search query\r"}
@@ -386,6 +416,20 @@ For `screenshot` and `text_dump`, omitting `data` falls back to the
 {"type":"key", "data":"enter"}
 {"type":"wait", "data":"1"}
 {"type":"screenshot", "data":"/tmp/result.png"}
+```
+
+### Example: bare format
+
+With `command_format = "bare"`, the same commands are written without braces:
+
+```
+"type":"text", "data":"search query\r"
+"type":"wait", "data":"2"
+"type":"key", "data":"arrow_down"
+"type":"key", "data":"arrow_down"
+"type":"key", "data":"enter"
+"type":"wait", "data":"1"
+"type":"screenshot", "data":"/tmp/result.png"
 ```
 
 > **Note:** Key names map to standard VT/xterm escape sequences (normal cursor

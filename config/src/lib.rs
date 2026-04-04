@@ -451,6 +451,8 @@ pub struct Linux {
     pub command_file: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command_format: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stderr_passthrough: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -469,6 +471,8 @@ pub struct Macos {
     pub command_file: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command_format: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stderr_passthrough: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -493,6 +497,8 @@ pub struct Windows {
     pub command_file: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command_format: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stderr_passthrough: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -939,6 +945,21 @@ pub fn ghostty_config_string(manifest: &Config) -> String {
             _ => write_ghostty_value(&mut out, key, value),
         }
     }
+
+    // Inject per-platform stderr-passthrough into ghostty config.
+    let stderr_passthrough = if cfg!(target_os = "linux") {
+        manifest.linux.as_ref().and_then(|l| l.stderr_passthrough)
+    } else if cfg!(target_os = "macos") {
+        manifest.macos.as_ref().and_then(|m| m.stderr_passthrough)
+    } else if cfg!(target_os = "windows") {
+        manifest.windows.as_ref().and_then(|w| w.stderr_passthrough)
+    } else {
+        None
+    };
+    if stderr_passthrough == Some(true) {
+        out.push_str("stderr-passthrough = true\n");
+    }
+
     out
 }
 
