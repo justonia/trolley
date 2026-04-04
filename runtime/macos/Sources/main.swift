@@ -17,7 +17,8 @@ var gWindowConfig = TrolleyGuiConfig(
     pid_file: nil,
     text_dump_path: nil,
     text_dump_format: 0,
-    command_file: nil
+    command_file: nil,
+    command_format: 0
 )
 
 // ---------------------------------------------------------------------------
@@ -503,10 +504,15 @@ struct TrolleyCommand {
 }
 
 /// Parse a single JSON line into a TrolleyCommand.
-func parseCommandLine(_ line: String) -> TrolleyCommand? {
+/// Aborts the process if the line cannot be parsed — partial execution of a
+/// command batch would leave the controlling program in an undefined state.
+func parseCommandLine(_ line: String) -> TrolleyCommand {
     guard let jsonData = line.data(using: .utf8),
           let obj = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
-          let typeStr = obj["type"] as? String else { return nil }
+          let typeStr = obj["type"] as? String else {
+        fputs("trolley: command: failed to parse line: \(line)\n", stderr)
+        exit(1)
+    }
     let data = obj["data"] as? String ?? ""
     let tag: TrolleyCommand.Tag
     switch typeStr {
@@ -516,8 +522,8 @@ func parseCommandLine(_ line: String) -> TrolleyCommand? {
     case "screenshot": tag = .screenshot
     case "text_dump": tag = .textDump
     default:
-        fputs("trolley: command: unknown type \"\(typeStr)\"\n", stderr)
-        return nil
+        fputs("trolley: command: failed to parse line: \(line)\n", stderr)
+        exit(1)
     }
     var format: UInt8 = 0
     if tag == .textDump, let fmtStr = obj["format"] as? String {
@@ -530,23 +536,36 @@ func parseCommandLine(_ line: String) -> TrolleyCommand? {
     return TrolleyCommand(tag: tag, data: data, format: format)
 }
 
+/// Resolve the command format from TROLLEY_COMMAND_FORMAT env var, falling back to config.
+func resolvedCommandFormat() -> UInt8 {
+    if let envVal = ProcessInfo.processInfo.environment["TROLLEY_COMMAND_FORMAT"], !envVal.isEmpty {
+        return envVal == "bare" ? 1 : 0
+    }
+    return gWindowConfig.command_format
+}
+
 /// Load and execute commands from the command file.
 /// Waits are handled via recursive DispatchQueue.main.asyncAfter.
 func loadAndExecuteCommandFile(path: String) {
-    guard let contents = try? String(contentsOfFile: path, encoding: .utf8) else { return }
-    // Delete the file so the sender can write a fresh one.
-    try? FileManager.default.removeItem(atPath: path)
+    guard let contents = try? String(contentsOfFile: path, encoding: .utf8) else {
+        fputs("trolley: command: failed to read \(path)\n", stderr)
+        exit(1)
+    }
+    // Truncate the file to zero bytes (signals "read acknowledged").
+    // The file will be deleted once all commands finish executing.
+    FileManager.default.createFile(atPath: path, contents: Data())
 
+    let format = resolvedCommandFormat()
     let lines = contents.split(separator: "\n", omittingEmptySubsequences: true)
     var commands: [TrolleyCommand] = []
     for line in lines {
         let trimmed = line.trimmingCharacters(in: .whitespaces)
         if trimmed.isEmpty { continue }
-        if let cmd = parseCommandLine(trimmed) {
-            commands.append(cmd)
-        }
+        // In bare format, wrap each line with { } before parsing.
+        let jsonLine = format == 1 ? "{\(trimmed)}" : trimmed
+        commands.append(parseCommandLine(jsonLine))
     }
-    executeCommands(commands, index: 0)
+    executeCommands(commands, index: 0, commandFilePath: path)
 }
 
 /// Maximum time (seconds) to wait for a screenshot file to appear.
@@ -560,10 +579,10 @@ func fileExistsWithSize(_ path: String) -> Bool {
 }
 
 /// Poll for a screenshot file, then continue executing commands.
-func waitForScreenshot(path: String, deadline: Date, commands: [TrolleyCommand], index: Int) {
+func waitForScreenshot(path: String, deadline: Date, commands: [TrolleyCommand], index: Int, commandFilePath: String?) {
     if fileExistsWithSize(path) {
         fputs("trolley: command: screenshot ready \(path)\n", stderr)
-        executeCommands(commands, index: index)
+        executeCommands(commands, index: index, commandFilePath: commandFilePath)
         return
     }
     if Date() >= deadline {
@@ -572,19 +591,26 @@ func waitForScreenshot(path: String, deadline: Date, commands: [TrolleyCommand],
     }
     // Poll again in 50ms.
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-        waitForScreenshot(path: path, deadline: deadline, commands: commands, index: index)
+        waitForScreenshot(path: path, deadline: deadline, commands: commands, index: index, commandFilePath: commandFilePath)
     }
 }
 
 /// Execute commands sequentially, deferring on wait and screenshot commands.
-func executeCommands(_ commands: [TrolleyCommand], index: Int) {
-    guard index < commands.count else { return }
+/// When all commands are done, deletes the command file (signals "execution finished").
+func executeCommands(_ commands: [TrolleyCommand], index: Int, commandFilePath: String?) {
+    guard index < commands.count else {
+        // All commands finished — delete the command file.
+        if let filePath = commandFilePath {
+            try? FileManager.default.removeItem(atPath: filePath)
+        }
+        return
+    }
     let cmd = commands[index]
 
     if cmd.tag == .wait {
         let seconds = Double(cmd.data) ?? 1.0
         DispatchQueue.main.asyncAfter(deadline: .now() + seconds) {
-            executeCommands(commands, index: index + 1)
+            executeCommands(commands, index: index + 1, commandFilePath: commandFilePath)
         }
         return
     }
@@ -601,18 +627,22 @@ func executeCommands(_ commands: [TrolleyCommand], index: Int) {
         } else {
             // No path — can't wait, just continue.
             if index + 1 < commands.count {
-                executeCommands(commands, index: index + 1)
+                executeCommands(commands, index: index + 1, commandFilePath: commandFilePath)
+            } else if let filePath = commandFilePath {
+                try? FileManager.default.removeItem(atPath: filePath)
             }
             return
         }
         let deadline = Date().addingTimeInterval(screenshotTimeoutSeconds)
-        waitForScreenshot(path: path, deadline: deadline, commands: commands, index: index + 1)
+        waitForScreenshot(path: path, deadline: deadline, commands: commands, index: index + 1, commandFilePath: commandFilePath)
         return
     }
 
     // Continue to next command immediately.
     if index + 1 < commands.count {
-        executeCommands(commands, index: index + 1)
+        executeCommands(commands, index: index + 1, commandFilePath: commandFilePath)
+    } else if let filePath = commandFilePath {
+        try? FileManager.default.removeItem(atPath: filePath)
     }
 }
 

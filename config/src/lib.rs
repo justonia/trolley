@@ -449,6 +449,8 @@ pub struct Linux {
     pub text_dump_format: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command_file: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command_format: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -465,6 +467,8 @@ pub struct Macos {
     pub text_dump_format: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command_file: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command_format: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -487,6 +491,8 @@ pub struct Windows {
     pub text_dump_format: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command_file: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command_format: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -985,6 +991,8 @@ pub struct TrolleyGuiConfig {
     /// Command file path. NULL = command file disabled.
     /// This pointer is leaked and valid for the process lifetime.
     pub command_file: *const c_char,
+    /// Command format: 0 = jsonl (default), 1 = bare (lines without wrapping braces).
+    pub command_format: u8,
 }
 
 fn windows_precise_timer_enabled(manifest: &Config) -> bool {
@@ -1133,6 +1141,23 @@ pub unsafe extern "C" fn trolley_load_manifest(
                 c_string.into_raw() as *const c_char
             }
             _ => std::ptr::null(),
+        };
+
+        // command_format: env var TROLLEY_COMMAND_FORMAT overrides per-platform config.
+        let config_command_format: Option<&str> = if cfg!(target_os = "linux") {
+            manifest.linux.as_ref().and_then(|l| l.command_format.as_deref())
+        } else if cfg!(target_os = "macos") {
+            manifest.macos.as_ref().and_then(|m| m.command_format.as_deref())
+        } else if cfg!(target_os = "windows") {
+            manifest.windows.as_ref().and_then(|w| w.command_format.as_deref())
+        } else {
+            None
+        };
+        let env_command_format = std::env::var("TROLLEY_COMMAND_FORMAT").ok();
+        let command_format = env_command_format.as_deref().or(config_command_format);
+        window_config.command_format = match command_format {
+            Some("bare") => 1,
+            _ => 0, // jsonl
         };
 
         // Report ghostty config length so the caller can allocate.

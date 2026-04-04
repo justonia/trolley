@@ -45,6 +45,7 @@ var g_window_config: trolley.TrolleyGuiConfig = .{
     .text_dump_path = null,
     .text_dump_format = 0,
     .command_file = null,
+    .command_format = 0,
 };
 
 // ---------------------------------------------------------------------------
@@ -408,7 +409,7 @@ fn commandSignalHandler(_: c_int) callconv(.c) void {
 fn handlePendingCommandLoad() void {
     if (!g_command_requested.swap(false, .acq_rel)) return;
     const path = g_command_file_path orelse return;
-    g_command_queue.loadFromFile(path) catch {};
+    g_command_queue.loadFromFile(path);
 }
 
 /// Execute ready commands from the queue.
@@ -669,8 +670,9 @@ pub fn main() !void {
     _ = glfw.glfwSetWindowFocusCallback(window, &focusCallback);
     _ = glfw.glfwSetWindowContentScaleCallback(window, &contentScaleCallback);
 
-    // -- Resolve command file path and register SIGUSR1 --
+    // -- Resolve command file path/format and register SIGUSR1 --
     g_command_file_path = command.resolveCommandFilePath(g_window_config.command_file);
+    g_command_queue.format = command.resolveCommandFormat(g_window_config.command_format);
     if (g_command_file_path) |cmd_path| {
         var sa: std.posix.Sigaction = .{
             .handler = .{ .handler = commandSignalHandler },
@@ -696,6 +698,8 @@ pub fn main() !void {
         if (g_command_queue.isActive()) {
             glfw.glfwWaitEventsTimeout(0.05); // 50ms polling for wait timers
         } else {
+            // Queue just became inactive — delete the command file if pending.
+            g_command_queue.completeAndCleanup();
             glfw.glfwWaitEvents();
         }
     }

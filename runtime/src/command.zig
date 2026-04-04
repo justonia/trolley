@@ -37,6 +37,11 @@ pub const CommandQueue = struct {
     /// When set, the queue blocks until this screenshot file exists with size > 0.
     pending_screenshot: ?PendingScreenshot = null,
     arena: std.heap.ArenaAllocator,
+    /// Command format: 0 = jsonl (default), 1 = bare (lines without wrapping braces).
+    format: u8 = 0,
+    /// Path of the command file currently being processed (for two-phase lifecycle).
+    /// Set during loadFromFile; cleared by completeAndCleanup.
+    pending_file_path: ?[*:0]const u8 = null,
 
     pub fn init(allocator: std.mem.Allocator) CommandQueue {
         return .{ .arena = std.heap.ArenaAllocator.init(allocator) };
@@ -52,39 +57,62 @@ pub const CommandQueue = struct {
         self.current = 0;
         self.wait_deadline_ms = null;
         self.pending_screenshot = null;
+        self.pending_file_path = null;
         _ = self.arena.reset(.retain_capacity);
     }
 
-    /// Load commands from a file at `path`, then delete the file.
-    pub fn loadFromFile(self: *CommandQueue, path: [*:0]const u8) !void {
+    /// Load commands from a file at `path`, then truncate it to zero bytes.
+    /// The file is deleted later by `completeAndCleanup` once all commands finish.
+    /// Aborts the process on I/O or parse errors.
+    pub fn loadFromFile(self: *CommandQueue, path: [*:0]const u8) void {
         self.reset();
-        const file = std.fs.cwd().openFileZ(path, .{}) catch |err| {
+        const file = std.fs.cwd().openFileZ(path, .{ .mode = .read_write }) catch |err| {
             std.debug.print("trolley: command: failed to open {s}: {}\n", .{ path, err });
-            return err;
+            std.process.exit(1);
         };
         defer file.close();
         const alloc = self.arena.allocator();
         const contents = file.readToEndAlloc(alloc, 1024 * 1024) catch |err| {
             std.debug.print("trolley: command: failed to read {s}: {}\n", .{ path, err });
-            return err;
+            std.process.exit(1);
         };
-        self.parse(contents) catch |err| {
-            std.debug.print("trolley: command: parse error: {}\n", .{err});
-            return err;
-        };
-        // Delete the file so the sender can write a fresh one next time.
-        std.fs.cwd().deleteFileZ(path) catch {};
+        self.parse(contents);
+        // Truncate the file to zero bytes (signals "read acknowledged").
+        // The file will be deleted by completeAndCleanup() once all commands finish.
+        file.setEndPos(0) catch {};
+        self.pending_file_path = path;
     }
 
     /// Parse newline-delimited JSON commands from a byte slice.
-    fn parse(self: *CommandQueue, contents: []const u8) !void {
+    /// Aborts the process if any line fails to parse — partial execution of a
+    /// command batch would leave the controlling program in an undefined state.
+    fn parse(self: *CommandQueue, contents: []const u8) void {
         const alloc = self.arena.allocator();
         var iter = std.mem.splitScalar(u8, contents, '\n');
         while (iter.next()) |line| {
             const trimmed = std.mem.trim(u8, line, " \t\r");
             if (trimmed.len == 0) continue;
-            const cmd = try parseCommand(alloc, trimmed);
-            try self.commands.append(alloc, cmd);
+
+            // In bare format, wrap each line with { } before parsing.
+            const json_line = if (self.format == 1) blk: {
+                const wrapped = alloc.alloc(u8, trimmed.len + 2) catch {
+                    std.debug.print("trolley: command: out of memory\n", .{});
+                    std.process.exit(1);
+                };
+                wrapped[0] = '{';
+                @memcpy(wrapped[1 .. 1 + trimmed.len], trimmed);
+                wrapped[trimmed.len + 1] = '}';
+                break :blk wrapped;
+            } else trimmed;
+
+            const cmd = parseCommand(alloc, json_line) catch {
+                std.debug.print("trolley: command: failed to parse line: {s}\n", .{json_line});
+                std.process.exit(1);
+            };
+            self.commands.append(alloc, cmd) catch {
+                std.debug.print("trolley: command: out of memory\n", .{});
+                std.process.exit(1);
+            };
         }
     }
 
@@ -147,6 +175,15 @@ pub const CommandQueue = struct {
         return self.current < self.commands.items.len or
             self.wait_deadline_ms != null or
             self.pending_screenshot != null;
+    }
+
+    /// Delete the command file after all commands have finished executing.
+    /// Called by the platform event loop when the queue transitions from active to inactive.
+    pub fn completeAndCleanup(self: *CommandQueue) void {
+        if (self.pending_file_path) |path| {
+            std.fs.cwd().deleteFileZ(path) catch {};
+            self.pending_file_path = null;
+        }
     }
 };
 
@@ -394,6 +431,22 @@ pub fn nowMs() i64 {
 // ---------------------------------------------------------------------------
 // Command file path resolution
 // ---------------------------------------------------------------------------
+
+/// Resolve the command format from the environment variable
+/// TROLLEY_COMMAND_FORMAT, falling back to the config value.
+/// Returns 0 for jsonl (default), 1 for bare.
+pub fn resolveCommandFormat(config_format: u8) u8 {
+    if (comptime builtin.os.tag == .windows) {
+        return config_format;
+    } else {
+        const env_val = std.posix.getenv("TROLLEY_COMMAND_FORMAT");
+        if (env_val) |val| {
+            if (std.mem.eql(u8, val, "bare")) return 1;
+            if (val.len > 0) return 0; // explicit non-bare = jsonl
+        }
+        return config_format;
+    }
+}
 
 /// Resolve the command file path from the environment variable
 /// TROLLEY_COMMAND_FILE, falling back to the config value.

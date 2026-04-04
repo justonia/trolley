@@ -261,6 +261,7 @@ var g_window_config: trolley.TrolleyGuiConfig = .{
     .text_dump_path = null,
     .text_dump_format = 0,
     .command_file = null,
+    .command_format = 0,
 };
 
 /// Command queue for processing command file instructions.
@@ -1205,8 +1206,9 @@ pub fn main() !void {
     // -- Show window --
     _ = wam.ShowWindow(hwnd, wam.SW_SHOW);
 
-    // -- Resolve command file path and create named event for trigger --
+    // -- Resolve command file path/format and create named event for trigger --
     g_command_file_path = command.resolveCommandFilePath(g_window_config.command_file);
+    g_command_queue.format = command.resolveCommandFormat(g_window_config.command_format);
     if (g_command_file_path) |cmd_path| {
         var name_buf: [64]u16 = undefined;
         const pid = GetCurrentProcessId();
@@ -1262,7 +1264,12 @@ pub fn main() !void {
         processCommandQueue();
 
         // Use shorter timeout when command queue is active (for wait timers).
-        const timeout: u32 = if (g_command_queue.isActive()) 50 else 16;
+        const active = g_command_queue.isActive();
+        if (!active) {
+            // Queue just became inactive — delete the command file if pending.
+            g_command_queue.completeAndCleanup();
+        }
+        const timeout: u32 = if (active) 50 else 16;
 
         const wait_result = MsgWaitForMultipleObjects(
             wait_count,
@@ -1275,7 +1282,7 @@ pub fn main() !void {
         if (command_wait_idx) |idx| {
             if (wait_result == WAIT_OBJECT_0 + idx) {
                 if (g_command_file_path) |path| {
-                    g_command_queue.loadFromFile(path) catch {};
+                    g_command_queue.loadFromFile(path);
                 }
             }
         }
