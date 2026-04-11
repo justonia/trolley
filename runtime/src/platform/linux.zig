@@ -29,6 +29,9 @@ var g_command_queue: command.CommandQueue = command.CommandQueue.init(std.heap.p
 /// Resolved command file path (from env or config).
 var g_command_file_path: ?[*:0]const u8 = null;
 
+/// Extra GLFW input-path logging for Linux debugging.
+var g_log_glfw_input: bool = false;
+
 // Window config from trolley manifest
 var g_window_config: trolley.TrolleyGuiConfig = .{
     .initial_width = 0,
@@ -203,6 +206,125 @@ var g_pending_key_event: ?ghostty.ghostty_input_key_s = null;
 var g_pending_text_buf: [5]u8 = undefined;
 var g_key_text_buf: [5]u8 = undefined;
 
+extern "c" fn getenv(name: [*:0]const u8) ?[*:0]const u8;
+
+fn initInputLogging() void {
+    const value = getenv("TROLLEY_DEBUG_GLFW_INPUT") orelse return;
+    const str = std.mem.span(value);
+    if (std.mem.eql(u8, str, "0") or
+        std.mem.eql(u8, str, "false") or
+        std.mem.eql(u8, str, "FALSE") or
+        std.mem.eql(u8, str, "off") or
+        std.mem.eql(u8, str, "OFF"))
+    {
+        return;
+    }
+
+    g_log_glfw_input = true;
+    std.debug.print(
+        "trolley: input logging enabled via TROLLEY_DEBUG_GLFW_INPUT on backend={s}\n",
+        .{glfwPlatformName()},
+    );
+}
+
+fn glfwPlatformName() []const u8 {
+    return switch (glfw.glfwGetPlatform()) {
+        glfw.GLFW_PLATFORM_X11 => "x11",
+        glfw.GLFW_PLATFORM_WAYLAND => "wayland",
+        glfw.GLFW_PLATFORM_NULL => "null",
+        else => "unknown",
+    };
+}
+
+fn actionName(action: ghostty.ghostty_input_action_e) []const u8 {
+    return switch (action) {
+        ghostty.GHOSTTY_ACTION_PRESS => "press",
+        ghostty.GHOSTTY_ACTION_RELEASE => "release",
+        ghostty.GHOSTTY_ACTION_REPEAT => "repeat",
+        else => "unknown",
+    };
+}
+
+fn maybeTextSlice(text: ?[*]const u8) ?[]const u8 {
+    const ptr = text orelse return null;
+    const zptr: [*:0]const u8 = @ptrCast(ptr);
+    return std.mem.span(zptr);
+}
+
+fn maybeKeyNameSlice(key_name: ?[*:0]const u8) ?[]const u8 {
+    const ptr = key_name orelse return null;
+    return std.mem.span(ptr);
+}
+
+fn logKeyFlow(
+    phase: []const u8,
+    note: []const u8,
+    glfw_key: c_int,
+    scancode: c_int,
+    keycode: u32,
+    glfw_mods: c_int,
+    key_name: ?[*:0]const u8,
+    event: ghostty.ghostty_input_key_s,
+) void {
+    if (!g_log_glfw_input) return;
+
+    std.debug.print(
+        "trolley: input[{s}] backend={s} note={s} glfw_key={d} scancode={d} keycode={d} action={s} glfw_mods=0x{x} mods=0x{x} consumed=0x{x} key_name={s} unshifted=U+{X:0>4} text={s}\n",
+        .{
+            phase,
+            glfwPlatformName(),
+            note,
+            glfw_key,
+            scancode,
+            keycode,
+            actionName(event.action),
+            glfw_mods,
+            @as(c_uint, @intCast(event.mods)),
+            @as(c_uint, @intCast(event.consumed_mods)),
+            maybeKeyNameSlice(key_name) orelse "<none>",
+            event.unshifted_codepoint,
+            maybeTextSlice(event.text) orelse "<none>",
+        },
+    );
+}
+
+fn logKeyResult(phase: []const u8, consumed: bool, pending: bool) void {
+    if (!g_log_glfw_input) return;
+    std.debug.print(
+        "trolley: input[{s}] consumed={} pending={}\n",
+        .{ phase, consumed, pending },
+    );
+}
+
+fn logCharEvent(phase: []const u8, codepoint: u32, glfw_mods: ?c_int, pending: bool) void {
+    if (!g_log_glfw_input) return;
+    if (glfw_mods) |mods| {
+        std.debug.print(
+            "trolley: input[{s}] backend={s} codepoint=U+{X:0>4} mods=0x{x} pending={}\n",
+            .{ phase, glfwPlatformName(), codepoint, mods, pending },
+        );
+    } else {
+        std.debug.print(
+            "trolley: input[{s}] backend={s} codepoint=U+{X:0>4} pending={}\n",
+            .{ phase, glfwPlatformName(), codepoint, pending },
+        );
+    }
+}
+
+fn translatedTextConsumedMods(mods: ghostty.ghostty_input_mods_e) ghostty.ghostty_input_mods_e {
+    // Mirror Ghostty's other embedded runtimes: control-like modifiers stay
+    // active for bindings/encoding, while text-producing modifiers are marked
+    // as consumed once we have translated UTF-8.
+    var consumed: c_int = @intCast(mods);
+    consumed &= ~(ghostty.GHOSTTY_MODS_CTRL |
+        ghostty.GHOSTTY_MODS_ALT |
+        ghostty.GHOSTTY_MODS_SUPER |
+        ghostty.GHOSTTY_MODS_CTRL_RIGHT |
+        ghostty.GHOSTTY_MODS_ALT_RIGHT |
+        ghostty.GHOSTTY_MODS_SUPER_RIGHT);
+    return @intCast(consumed);
+}
+
 fn keyCallback(
     _: ?*glfw.GLFWwindow,
     glfw_key: c_int,
@@ -232,8 +354,8 @@ fn keyCallback(
     // would produce without any modifiers, equivalent to GTK's
     // keyval_unicode_unshifted. Required for Kitty keyboard protocol encoding
     // and legacy ctrl+shift+letter handling.
+    const key_name = glfw.glfwGetKeyName(glfw_key, scancode);
     const unshifted_codepoint: u32 = uc: {
-        const key_name = glfw.glfwGetKeyName(glfw_key, scancode);
         if (key_name) |name_ptr| {
             const name: [*:0]const u8 = name_ptr;
             const len = std.unicode.utf8ByteSequenceLength(name[0]) catch break :uc 0;
@@ -265,29 +387,55 @@ fn keyCallback(
     const key_event: ghostty.ghostty_input_key_s = .{
         .action = action,
         .mods = mods,
-        .consumed_mods = ghostty.GHOSTTY_MODS_NONE,
+        .consumed_mods = if (text != null)
+            translatedTextConsumedMods(mods)
+        else
+            ghostty.GHOSTTY_MODS_NONE,
         .keycode = keycode,
         .text = text,
         .unshifted_codepoint = unshifted_codepoint,
         .composing = false,
     };
 
+    logKeyFlow("key", "received", glfw_key, scancode, keycode, glfw_mods, key_name, key_event);
+
+    // For printable keys without ctrl, defer press/repeat to charCallback
+    // so it can supply the real translated character (e.g. Shift+1 → '!').
+    // Without this, ghostty consumes the event with no text (because shift
+    // is a modifier) and charCallback never gets a chance to provide it.
+    // Ctrl is excluded because GLFW never fires charCallback when ctrl is held.
+    const is_printable = unshifted_codepoint >= 0x20;
+    if (!has_ctrl and is_printable and text == null and
+        (action == ghostty.GHOSTTY_ACTION_PRESS or action == ghostty.GHOSTTY_ACTION_REPEAT))
+    {
+        g_pending_key_event = key_event;
+        logKeyResult("key.defer", false, true);
+        return;
+    }
+
     // Clear any previous pending event.
     g_pending_key_event = null;
 
     const consumed = ghostty.ghostty_surface_key(surface, key_event);
+    logKeyResult("key.dispatch", consumed, false);
 
     // If ghostty didn't consume this press/repeat, store it so charCallback
     // can retry with the real text from the input method.
-    if (!consumed and (action == ghostty.GHOSTTY_ACTION_PRESS or
+    if (!consumed and text == null and (action == ghostty.GHOSTTY_ACTION_PRESS or
         action == ghostty.GHOSTTY_ACTION_REPEAT))
     {
         g_pending_key_event = key_event;
+        logKeyResult("key.retry", consumed, true);
     }
+}
+
+fn charModsCallback(_: ?*glfw.GLFWwindow, codepoint: c_uint, glfw_mods: c_int) callconv(.c) void {
+    logCharEvent("charmods", codepoint, glfw_mods, g_pending_key_event != null);
 }
 
 fn charCallback(_: ?*glfw.GLFWwindow, codepoint: c_uint) callconv(.c) void {
     const surface = g_surface orelse return;
+    logCharEvent("char", codepoint, null, g_pending_key_event != null);
 
     // charCallback only matters if we have a pending (ignored) key event.
     var key_event = g_pending_key_event orelse return;
@@ -302,12 +450,16 @@ fn charCallback(_: ?*glfw.GLFWwindow, codepoint: c_uint) callconv(.c) void {
         g_pending_text_buf[len] = 0;
     }
 
-    // Update the key event with the real text and codepoint.
+    // Update the key event with the real text. Keep unshifted_codepoint
+    // as the original unshifted value (set in keyCallback) since the kitty
+    // keyboard protocol needs the base key, not the shifted character.
     key_event.text = &g_pending_text_buf;
-    key_event.unshifted_codepoint = codepoint;
+    key_event.consumed_mods = translatedTextConsumedMods(key_event.mods);
+    logKeyFlow("char.dispatch", "replay-with-text", -1, -1, key_event.keycode, 0, null, key_event);
 
     // Re-send the key event to ghostty with the text populated.
-    _ = ghostty.ghostty_surface_key(surface, key_event);
+    const consumed = ghostty.ghostty_surface_key(surface, key_event);
+    logKeyResult("char.dispatch", consumed, false);
 }
 
 fn mouseButtonCallback(
@@ -561,6 +713,7 @@ pub fn main() !void {
 
     // -- Load bundled environment variables (must precede ghostty_init) --
     common.loadBundledEnvironment();
+    initInputLogging();
 
     // -- Inject runtime PID as environment variable if configured --
     var pid_buf: [16]u8 = undefined;
@@ -668,6 +821,7 @@ pub fn main() !void {
     // -- Register GLFW callbacks --
     _ = glfw.glfwSetKeyCallback(window, &keyCallback);
     _ = glfw.glfwSetCharCallback(window, &charCallback);
+    _ = glfw.glfwSetCharModsCallback(window, &charModsCallback);
     _ = glfw.glfwSetMouseButtonCallback(window, &mouseButtonCallback);
     _ = glfw.glfwSetCursorPosCallback(window, &cursorPosCallback);
     _ = glfw.glfwSetScrollCallback(window, &scrollCallback);
